@@ -57,6 +57,13 @@ python3 test/test_runner.py
 ```
 Runner checks use stand-in executables; also run the suite against a real GOSH build before submitting.
 
+Run the focused startup regressions against a real build (uses isolated HOME
+folders and pseudo-terminals for interactive startup):
+```bash
+python3 test/test_startup.py
+```
+They also run as part of `test/test_suite.sh`; `GOSH` selects another binary.
+
 ### 4. Running Benchmarks
 To evaluate performance impacts:
 ```bash

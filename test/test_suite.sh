@@ -164,6 +164,13 @@ run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 
+# Startup modes require isolated HOME directories and pseudo-terminals.
+if GOSH="$GOSH" python3 "$REPO_ROOT/test/test_startup.py"; then
+    PASSED=$((PASSED + 1))
+else
+    FAILED=$((FAILED + 1))
+fi
+
 # Summary
 echo "================================================"
 echo " Test Suite Finished"

@@ -335,7 +335,7 @@ GOSH is under active development. The current release is focused on core POSIX s
 - [ ] Arithmetic evaluator bytecode compilation (to match and exceed Bash loop throughput)
 - [ ] Recursive globbing (`**/*.ext`)
 - [ ] Programmable user-defined completion functions
-- [ ] User configuration file loading (`~/.goshrc`)
+- [x] Interactive user configuration file loading (`~/.goshrc`)
 
 ---
 

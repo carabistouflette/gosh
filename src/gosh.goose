@@ -92,15 +92,6 @@ fn init_state(state: ShellState&) {
     state.aliases.push(a_la);
 
     state.alias_count = state.aliases.len as i32;
-
-    // Check for ~/.goshrc
-    if state.home.len > 0 {
-        var goshrc_path: u8[>..] = [];
-        format(goshrc_path, state.home, "/.goshrc");
-        if gosh_file_exists(goshrc_path) != 0 {
-            source_file(state, goshrc_path);
-        }
-    }
 }
 
 fn add_history(state: ShellState&, line: const u8[:]) {
@@ -197,8 +188,20 @@ fn main() {
     }
 
     // Interactive REPL
-    state.interactive = true;
-    if gosh_term_isatty(0) != 0 {
+    state.interactive = gosh_term_isatty(0) != 0;
+    if state.interactive {
+        // Check for ~/.goshrc
+        if state.home.len > 0 {
+            var goshrc_path: u8[>..] = [];
+            format(goshrc_path, state.home, "/.goshrc");
+            if gosh_file_exists(goshrc_path) != 0 {
+                source_file(state, goshrc_path);
+            }
+        }
+        if !state.running {
+            gosh_exit(state.last_status);
+            return;
+        }
         print_welcome_banner();
     }
 
