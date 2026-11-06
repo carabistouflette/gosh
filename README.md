@@ -4,7 +4,7 @@
 
 <h1 align="center">GOSH</h1>
 
-**A Fast, Native Unix Shell Written Primarily in Goose**
+**A Native Unix Shell Implemented in Goose with a POSIX C Backend**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build: Native](https://img.shields.io/badge/Language-Goose-orange.svg)](https://github.com/goose-lang)
@@ -14,9 +14,11 @@
 
 ## 1. Overview
 
-**GOSH** (Goose Shell) is a modern, high-performance Unix command interpreter written primarily in the **Goose programming language**, with a minimal and isolated C interoperability layer for low-level POSIX system primitives.
+**GOSH** (Goose Shell) is a native Unix command interpreter whose shell language implementation is written in **Goose**. It uses a substantial **C POSIX backend** for operating-system and process execution work that Goose currently accesses through an FFI boundary.
 
-GOSH compiles directly into a standalone native ELF binary using the Goose toolchain. It provides the low startup latency and memory efficiency of lightweight shells like Dash, paired with the modern interactive convenience of shells like Fish and Zsh—including real-time syntax highlighting, autosuggestions, tab completions, and git-aware prompts.
+The Goose code owns the shell-facing logic: tokenization, parsing, expansion, shell state, builtins, command dispatch, and the interactive line editor. The C backend handles low-level terminal and process operations, and currently also contains parts of command execution such as process creation, external-program launching, pipeline setup, redirection, and command-output capture. So GOSH is Goose-based, but its execution backend is not C-free or limited to tiny syscall wrappers.
+
+GOSH compiles into a native ELF binary using the Goose toolchain. It aims to combine lightweight startup with interactive features such as syntax highlighting, history autosuggestions, tab completion, and git-aware prompts.
 
 ---
 
@@ -242,7 +244,7 @@ Input Line -> Lexer -> AST Parser -> Expander -> Executor -> POSIX Interop
 - **AST Parser ([`src/parser.goose`](src/parser.goose))**: Converts tokens into structured statements (`Statement`), pipelines (`Pipeline`), and commands (`Command`).
 - **Expansion Engine ([`src/expansion.goose`](src/expansion.goose))**: Resolves parameters, arithmetic, command substitutions, and glob patterns prior to execution.
 - **Executor ([`src/executor.goose`](src/executor.goose))**: Coordinates builtins, functions, multi-stage POSIX pipelines, subshells, and job management.
-- **POSIX Interop ([`src/gosh_os.c`](src/gosh_os.c) / [`src/gosh_os.goose`](src/gosh_os.goose))**: Minimal C wrapper handling `fork`, `execvp`, `pipe`, `dup2`, `tcsetattr`, and signals.
+- **POSIX Backend ([`src/gosh_os.c`](src/gosh_os.c) / [`src/gosh_os.goose`](src/gosh_os.goose))**: C functions exposed to Goose through FFI. Besides OS interfaces such as terminal control, file descriptors, and signals, this backend currently implements significant process-execution machinery, including `fork`/`exec`, pipeline creation, redirection, waiting, and command-output capture. The Goose executor coordinates shell semantics and execution, while some low-level execution paths are implemented in C.
 - **Line Editor ([`src/line_editor.goose`](src/line_editor.goose))**: Terminal raw-mode engine providing syntax highlighting, autosuggestions, and tab completion.
 
 For comprehensive architectural specifications, refer to [**`docs/ARCHITECTURE.md`**](docs/ARCHITECTURE.md).
