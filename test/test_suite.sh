@@ -164,6 +164,53 @@ run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 
+# 13. Fixed input capacities: reject the whole parse before executing a prefix.
+capacity_error() {
+    run_test "$1" "$2" "gosh: input capacity exceeded: $3 (maximum $4)" 2
+}
+printf -v words15 ' x%.0s' {1..15}
+run_test "16 argv entries" "echo$words15" "${words15:1}"
+capacity_error "17 argv entries reject earlier statement" "echo WRONG; echo$words15 x" arguments 16
+run_test "four pipeline stages" "echo ok | cat | cat | cat" "ok"
+capacity_error "fifth final pipeline stage" "echo WRONG | cat | cat | cat | cat" "pipeline stages" 4
+capacity_error "sixth pipeline stage" "echo WRONG | cat | cat | cat | cat | cat" "pipeline stages" 4
+run_test "four redirections" "echo ok > /dev/null > /dev/null > /dev/null > /dev/null" ""
+capacity_error "fifth redirection" "echo WRONG > /dev/null > /dev/null > /dev/null > /dev/null > /dev/null" redirections 4
+capacity_error "fifth compound redirection" "(echo WRONG) > /dev/null > /dev/null > /dev/null > /dev/null > /dev/null" redirections 4
+printf -v statements8 'true;%.0s' {1..8}
+run_test "eight statements" "$statements8" ""
+capacity_error "ninth statement rejects prefix" "echo WRONG;$statements8" statements 8
+printf -v separators63 ';%.0s' {1..63}
+run_test "63 tokens plus EOF" "$separators63" ""
+capacity_error "64 tokens reserve EOF" "$separators63;" tokens 63
+printf -v word128 '%0128d' 0
+run_test "128 word bytes" "echo $word128" "$word128"
+capacity_error "129 word bytes" "echo WRONG; echo ${word128}x" "word bytes" 128
+capacity_error "quoted word includes quote bytes" "echo '$word128'" "word bytes" 128
+capacity_error "substitution word bytes" "echo \$(echo $word128)" "word bytes" 128
+run_test "16 for words" "for i in$words15 x; do true; done" ""
+capacity_error "17 for words" "for i in$words15 x x; do echo WRONG; done" "for words" 16
+printf -v name32 'v%.0s' {1..32}
+run_test "32 byte for variable" "for $name32 in x; do true; done" ""
+capacity_error "33 byte for variable" "for ${name32}v in x; do echo WRONG; done" "for variable bytes" 32
+run_test "32 byte function name" "$name32() { true; }" ""
+capacity_error "33 byte function name" "${name32}v() { echo WRONG; }" "function name bytes" 32
+printf -v name64 'v%.0s' {1..64}
+run_test "64 byte assignment name" "$name64=x" ""
+capacity_error "65 byte assignment name" "${name64}v=x" "assignment name bytes" 64
+# Reconstructed body: 4 * (4 + 1 + 120 + 2) = 508 bytes, then true = 512.
+printf -v word120 '%0120d' 0
+printf -v body508 'true %s;true %s;true %s;true %s;' "$word120" "$word120" "$word120" "$word120"
+run_test "512 byte function body" "f() { ${body508}true }" ""
+capacity_error "513 byte function body" "f() { ${body508}truex }" "compound text bytes" 512
+
+printf -v spaces32768 '%32768s' ''
+printf '%s' "$spaces32768" > "$TMP_FILE"
+run_test "32768 byte script" 'source "$TMP_FILE"' ""
+printf ' ' >> "$TMP_FILE"
+capacity_error "32769 byte script" 'source "$TMP_FILE"' "script bytes" 32768
+rm -f "$TMP_FILE"
+
 # Summary
 echo "================================================"
 echo " Test Suite Finished"

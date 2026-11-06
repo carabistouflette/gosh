@@ -8,7 +8,7 @@ fn is_redir_token(kind: i32) -> bool {
     kind == TOKEN_REDIR_E2O
 }
 
-fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
+fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) -> bool {
     stmts.clear();
     var pos = 0;
     let n = tokens.len;
@@ -22,6 +22,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             continue;
         }
 
+        if stmts.len >= 8 { print("gosh: input capacity exceeded: statements (maximum 8)"); return false; }
+
         // 1. IF statement: if COND; then THEN; [else ELSE;] fi
         if tok.kind == TOKEN_IF {
             pos++;
@@ -29,7 +31,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
 
             // Collect condition tokens until 'then'
             while pos < n && tokens[pos].kind != TOKEN_THEN && tokens[pos].kind != TOKEN_EOF {
-                if stmt.cond_text.len > 0 { stmt.cond_text.push(' '); }
+                if stmt.cond_text.len > 0 { if stmt.cond_text.len >= 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; } stmt.cond_text.push(' '); }
+                if stmt.cond_text.len + tokens[pos].text.len > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                 format(stmt.cond_text, tokens[pos].text);
                 pos++;
             }
@@ -38,12 +41,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             // Collect then body until 'else', 'elif', or 'fi'
             while pos < n && tokens[pos].kind != TOKEN_ELSE && tokens[pos].kind != TOKEN_ELIF && tokens[pos].kind != TOKEN_FI && tokens[pos].kind != TOKEN_EOF {
                 if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(';');
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(' ');
                 } else {
                     if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
+                        if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.body_text.push(' ');
                     }
+                    if stmt.body_text.len + tokens[pos].text.len > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     format(stmt.body_text, tokens[pos].text);
                 }
                 pos++;
@@ -54,12 +61,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 pos++;
                 while pos < n && tokens[pos].kind != TOKEN_FI && tokens[pos].kind != TOKEN_EOF {
                     if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                        if stmt.else_text.len + 1 > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                         stmt.else_text.push(';');
+                        if stmt.else_text.len + 1 > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                         stmt.else_text.push(' ');
                     } else {
                         if stmt.else_text.len > 0 && stmt.else_text[stmt.else_text.len - 1] != ' ' {
+                            if stmt.else_text.len + 1 > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                             stmt.else_text.push(' ');
                         }
+                        if stmt.else_text.len + tokens[pos].text.len > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                         format(stmt.else_text, tokens[pos].text);
                     }
                     pos++;
@@ -71,7 +82,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 var r = Redirection { kind: tokens[pos].kind };
                 pos++;
                 if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
+                if stmt.redirs.len >= 4 { print("gosh: input capacity exceeded: redirections (maximum 4)"); return false; }
+                stmt.redirs.push(r);
             }
             stmts.push(stmt);
             continue;
@@ -83,7 +95,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             var stmt = Statement { kind: STMT_WHILE };
 
             while pos < n && tokens[pos].kind != TOKEN_DO && tokens[pos].kind != TOKEN_EOF {
-                if stmt.cond_text.len > 0 { stmt.cond_text.push(' '); }
+                if stmt.cond_text.len > 0 { if stmt.cond_text.len >= 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; } stmt.cond_text.push(' '); }
+                if stmt.cond_text.len + tokens[pos].text.len > 256 { print("gosh: input capacity exceeded: compound text bytes (maximum 256)"); return false; }
                 format(stmt.cond_text, tokens[pos].text);
                 pos++;
             }
@@ -91,12 +104,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
 
             while pos < n && tokens[pos].kind != TOKEN_DONE && tokens[pos].kind != TOKEN_EOF {
                 if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(';');
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(' ');
                 } else {
                     if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
+                        if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.body_text.push(' ');
                     }
+                    if stmt.body_text.len + tokens[pos].text.len > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     format(stmt.body_text, tokens[pos].text);
                 }
                 pos++;
@@ -107,7 +124,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 var r = Redirection { kind: tokens[pos].kind };
                 pos++;
                 if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
+                if stmt.redirs.len >= 4 { print("gosh: input capacity exceeded: redirections (maximum 4)"); return false; }
+                stmt.redirs.push(r);
             }
             stmts.push(stmt);
             continue;
@@ -118,13 +136,15 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             pos++;
             var stmt = Statement { kind: STMT_FOR };
             if pos < n && tokens[pos].kind == TOKEN_WORD {
+                if tokens[pos].text.len > 32 { print("gosh: input capacity exceeded: for variable bytes (maximum 32)"); return false; }
                 format(stmt.for_var, tokens[pos].text);
                 pos++;
             }
             if pos < n && tokens[pos].kind == TOKEN_IN {
                 pos++;
                 while pos < n && tokens[pos].kind != TOKEN_DO && tokens[pos].kind != TOKEN_SEMI && tokens[pos].kind != TOKEN_NEWLINE && tokens[pos].kind != TOKEN_EOF {
-                    if tokens[pos].kind == TOKEN_WORD && stmt.for_words.len < 16 {
+                    if tokens[pos].kind == TOKEN_WORD {
+                        if stmt.for_words.len >= 16 { print("gosh: input capacity exceeded: for words (maximum 16)"); return false; }
                         var w: u8[..128] = [];
                         format(w, tokens[pos].text);
                         stmt.for_words.push(w);
@@ -137,12 +157,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
 
             while pos < n && tokens[pos].kind != TOKEN_DONE && tokens[pos].kind != TOKEN_EOF {
                 if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(';');
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(' ');
                 } else {
                     if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
+                        if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.body_text.push(' ');
                     }
+                    if stmt.body_text.len + tokens[pos].text.len > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     format(stmt.body_text, tokens[pos].text);
                 }
                 pos++;
@@ -152,7 +176,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 var r = Redirection { kind: tokens[pos].kind };
                 pos++;
                 if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
+                if stmt.redirs.len >= 4 { print("gosh: input capacity exceeded: redirections (maximum 4)"); return false; }
+                stmt.redirs.push(r);
             }
             stmts.push(stmt);
             continue;
@@ -165,10 +190,12 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             if tok.kind == TOKEN_FUNCTION {
                 pos++;
                 if pos < n && tokens[pos].kind == TOKEN_WORD {
+                    if tokens[pos].text.len > 32 { print("gosh: input capacity exceeded: function name bytes (maximum 32)"); return false; }
                     format(stmt.func_name, tokens[pos].text);
                     pos++;
                 }
             } else {
+                if tok.text.len > 32 { print("gosh: input capacity exceeded: function name bytes (maximum 32)"); return false; }
                 format(stmt.func_name, tok.text);
                 pos += 3; // name ( )
             }
@@ -184,12 +211,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                         if depth == 0 { pos++; break; }
                     }
                     if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                        if stmt.func_body.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.func_body.push(';');
+                        if stmt.func_body.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.func_body.push(' ');
                     } else {
                         if stmt.func_body.len > 0 && stmt.func_body[stmt.func_body.len - 1] != ' ' {
+                            if stmt.func_body.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                             stmt.func_body.push(' ');
                         }
+                        if stmt.func_body.len + tokens[pos].text.len > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         format(stmt.func_body, tokens[pos].text);
                     }
                     pos++;
@@ -212,12 +243,16 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                     if depth == 0 { pos++; break; }
                 }
                 if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(';');
+                    if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     stmt.body_text.push(' ');
                 } else {
                     if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
+                        if stmt.body_text.len + 1 > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                         stmt.body_text.push(' ');
                     }
+                    if stmt.body_text.len + tokens[pos].text.len > 512 { print("gosh: input capacity exceeded: compound text bytes (maximum 512)"); return false; }
                     format(stmt.body_text, tokens[pos].text);
                 }
                 pos++;
@@ -226,7 +261,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 var r = Redirection { kind: tokens[pos].kind };
                 pos++;
                 if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
+                if stmt.redirs.len >= 4 { print("gosh: input capacity exceeded: redirections (maximum 4)"); return false; }
+                stmt.redirs.push(r);
             }
             if pos < n && (tokens[pos].kind == TOKEN_AND || tokens[pos].kind == TOKEN_OR || tokens[pos].kind == TOKEN_SEMI || tokens[pos].kind == TOKEN_AMP) {
                 if tokens[pos].kind == TOKEN_AND { stmt.op_after = OP_AND; }
@@ -250,9 +286,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 // End current command, push to pipeline
                 current_cmd.arg_count = current_cmd.argv.len as i32;
                 current_cmd.redir_count = current_cmd.redirs.len as i32;
-                if pipe.cmds.len < 4 {
-                    pipe.cmds.push(current_cmd);
-                }
+                if pipe.cmds.len >= 4 { print("gosh: input capacity exceeded: pipeline stages (maximum 4)"); return false; }
+                pipe.cmds.push(current_cmd);
                 current_cmd = Command {};
                 pos++;
                 continue;
@@ -276,9 +311,8 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                     format(r.target, tokens[pos].text);
                     pos++;
                 }
-                if current_cmd.redirs.len < 4 {
-                    current_cmd.redirs.push(r);
-                }
+                if current_cmd.redirs.len >= 4 { print("gosh: input capacity exceeded: redirections (maximum 4)"); return false; }
+                current_cmd.redirs.push(r);
                 continue;
             }
 
@@ -288,6 +322,7 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                 if current_cmd.argv.len == 0 && !current_cmd.is_assignment {
                     let eq = find(t.text, "=");
                     if eq > 0 && ascii::is_alpha(t.text[0]) {
+                        if eq > 64 { print("gosh: input capacity exceeded: assignment name bytes (maximum 64)"); return false; }
                         current_cmd.is_assignment = true;
                         format(current_cmd.assign_var, t.text[..eq]);
                         format(current_cmd.assign_val, t.text[eq + 1..]);
@@ -296,11 +331,10 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
                     }
                 }
 
-                if current_cmd.argv.len < 16 {
-                    var w: u8[..128] = [];
-                    format(w, t.text);
-                    current_cmd.argv.push(w);
-                }
+                if current_cmd.argv.len >= 16 { print("gosh: input capacity exceeded: arguments (maximum 16)"); return false; }
+                var w: u8[..128] = [];
+                format(w, t.text);
+                current_cmd.argv.push(w);
                 pos++;
                 continue;
             }
@@ -311,6 +345,7 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
         current_cmd.arg_count = current_cmd.argv.len as i32;
         current_cmd.redir_count = current_cmd.redirs.len as i32;
         if current_cmd.arg_count > 0 || current_cmd.is_assignment || current_cmd.redir_count > 0 {
+            if pipe.cmds.len >= 4 { print("gosh: input capacity exceeded: pipeline stages (maximum 4)"); return false; }
             pipe.cmds.push(current_cmd);
         }
         pipe.cmd_count = pipe.cmds.len as i32;
@@ -320,4 +355,5 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             stmts.push(stmt);
         }
     }
+    return true;
 }

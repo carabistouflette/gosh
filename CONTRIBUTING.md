@@ -57,6 +57,21 @@ python3 test/test_runner.py
 ```
 Runner checks use stand-in executables; also run the suite against a real GOSH build before submitting.
 
+Input capacity regressions are included in the portable suite. GOSH rejects a
+parse with status 2 when it exceeds 63 tokens (plus EOF), 8 statements, 4 pipeline
+stages, 16 command words (including the command name), 4 redirections, or 16
+`for` words. Token text is limited to 128 bytes, including preserved quote and
+substitution syntax. Parser fields also enforce their existing byte capacities:
+32 for function/loop variable names, 64 for assignment names, 256 for condition
+and else text, and 512 for body/function text. Reconstructed compound text counts
+inserted spaces and separators. Script files are limited to 32768 bytes.
+
+These checks apply to each parse, including recursively parsed bodies. A failure
+prevents execution of that parse; it does not roll back earlier recursive calls.
+Expansion output, alias reconstruction, interactive line editing, positional
+arguments supplied to GOSH itself, and shell state tables retain their existing
+fixed limits and are outside these lexer/parser checks.
+
 ### 4. Running Benchmarks
 To evaluate performance impacts:
 ```bash

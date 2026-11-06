@@ -557,10 +557,16 @@ recursive fn execute_script(state: ShellState&, script_text: const u8[:]) -> i32
     if script_text.len == 0 { return state.last_status; }
 
     var tokens: Token[..64] = [];
-    tokenize_line(script_text, tokens);
+    if tokenize_line(script_text, tokens) < 0 {
+        state.last_status = 2;
+        return 2;
+    }
 
     var stmts: Statement[..8] = [];
-    parse_statements(tokens, stmts);
+    if !parse_statements(tokens, stmts) {
+        state.last_status = 2;
+        return 2;
+    }
 
     var skip_next_and = false;
     var skip_next_or = false;
@@ -608,6 +614,11 @@ recursive fn source_file(state: ShellState&, path: const u8[:]) -> i32 {
         var content: u8[>..] = [];
         read_ok = read_file(path, content);
         if read_ok {
+            if content.len > 32768 {
+                print("gosh: input capacity exceeded: script bytes (maximum 32768)");
+                state.last_status = 2;
+                return 2;
+            }
             format(script_buf, content);
         }
     }
