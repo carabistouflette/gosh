@@ -4,7 +4,26 @@
 
 set -e
 
-GOSH="/home/aditya/gosh/bin/gosh"
+REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+GOSH=${GOSH-"$REPO_ROOT/bin/gosh"}
+
+if [ ! -f "$GOSH" ]; then
+    printf 'Error: GOSH binary is missing or not a regular file: %s\n' "$GOSH" >&2
+    printf 'Build it with: goose build -o bin/gosh src/gosh.goose (from %s)\nOr set GOSH to an executable path.\n' "$REPO_ROOT" >&2
+    exit 1
+fi
+if [ ! -x "$GOSH" ]; then
+    printf 'Error: GOSH binary is not executable: %s\nCheck its permissions (chmod +x) or set GOSH to an executable path.\n' "$GOSH" >&2
+    exit 1
+fi
+
+TEST_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gosh-tests.XXXXXXXX")
+trap 'rm -rf -- "$TEST_TMP_DIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Expand these paths inside GOSH so filename characters stay literal.
+export TMP_FILE="$TEST_TMP_DIR/output.txt"
+export TMP_ERR="$TEST_TMP_DIR/error.txt"
 PASSED=0
 FAILED=0
 
@@ -13,10 +32,15 @@ run_test() {
     local cmd="$2"
     local expected="$3"
 
-    local actual
-    actual=$($GOSH -c "$cmd" 2>&1 || true)
+    local expected_status="${4:-0}"
+    local actual actual_status
+    if actual=$("$GOSH" -c "$cmd" 2>&1); then
+        actual_status=0
+    else
+        actual_status=$?
+    fi
 
-    if [ "$actual" = "$expected" ]; then
+    if [ "$actual" = "$expected" ] && [ "$actual_status" -eq "$expected_status" ]; then
         echo -e "\033[32m[PASS]\033[0m $test_name"
         PASSED=$((PASSED + 1))
     else
@@ -24,6 +48,8 @@ run_test() {
         echo "  Command:  $cmd"
         echo "  Expected: [$expected]"
         echo "  Actual:   [$actual]"
+        echo "  Expected status: $expected_status"
+        echo "  Actual status:   $actual_status"
         FAILED=$((FAILED + 1))
     fi
 }
@@ -54,7 +80,9 @@ run_test "arithmetic precedence" "echo \$(( 2 + 3 * 4 ))" "14"
 run_test "arithmetic parentheses" "echo \$(( (2 + 3) * 4 ))" "20"
 run_test "special var status 0" "echo success && echo \$?" "success
 0"
-run_test "special var status error" "ls /nonexistent_path_404 2>/dev/null || echo \$?" "2"
+run_test "special var status error" "false || echo \$?" "1"
+run_test "failed command status" "false" "" 1
+run_test "explicit exit status" "exit 7" "" 7
 
 # 4. Command Substitution
 run_test "command substitution simple" "echo \$(echo nested)" "nested"
@@ -62,18 +90,13 @@ run_test "command substitution with pipe" "echo \$(echo hello | tr 'a-z' 'A-Z')"
 run_test "backtick substitution" "echo \`echo backtick\`" "backtick"
 
 # 5. Redirection
-TMP_FILE="/tmp/gosh_test_$$.txt"
-TMP_ERR="/tmp/gosh_err_$$.txt"
-
-run_test "redirect stdout >" "echo line1 > $TMP_FILE && cat $TMP_FILE" "line1"
-run_test "redirect append >>" "echo line2 >> $TMP_FILE && cat $TMP_FILE" "line1
+run_test "redirect stdout >" "echo line1 > \"\$TMP_FILE\" && cat \"\$TMP_FILE\"" "line1"
+run_test "redirect append >>" "echo line2 >> \"\$TMP_FILE\" && cat \"\$TMP_FILE\"" "line1
 line2"
-run_test "redirect stdin <" "cat < $TMP_FILE" "line1
+run_test "redirect stdin <" "cat < \"\$TMP_FILE\"" "line1
 line2"
-run_test "redirect stderr 2>" "ls /nonexistent_99 2> $TMP_ERR || cat $TMP_ERR | grep -o 'cannot access'" "cannot access"
-run_test "redirect 2>&1" "ls /nonexistent_99 2>&1 | grep -o 'cannot access'" "cannot access"
-
-rm -f "$TMP_FILE" "$TMP_ERR"
+run_test "redirect stderr 2>" "sh -c 'echo error >&2; exit 1' 2> \"\$TMP_ERR\" || cat \"\$TMP_ERR\"" "error"
+run_test "redirect 2>&1" "sh -c 'echo error >&2; exit 1' 2>&1 | grep error" "error"
 
 # 6. Pipelines
 run_test "two-stage pipeline" "echo -e 'banana\napple' | sort" "apple
@@ -85,9 +108,8 @@ run_test "set in pipeline" "MYVAR=findme && set | grep MYVAR" "MYVAR=findme"
 # 7. Subshells
 run_test "subshell isolation" "(cd /tmp && pwd) && pwd" "/tmp
 $(pwd)"
-run_test "subshell redirection" "(echo sub1; echo sub2) > $TMP_FILE && cat $TMP_FILE" "sub1
+run_test "subshell redirection" "(echo sub1; echo sub2) > \"\$TMP_FILE\" && cat \"\$TMP_FILE\"" "sub1
 sub2"
-rm -f "$TMP_FILE"
 
 # 8. Conditionals (IF/THEN/ELSE/FI)
 run_test "if true branch" "if test 1 -eq 1; then echo yes; else echo no; fi" "yes"
@@ -101,9 +123,8 @@ gamma"
 run_test "while loop" "c=0; while test \$c -lt 3; do echo \$c; c=\$((c + 1)); done" "0
 1
 2"
-run_test "for loop redirected" "for i in 1 2; do echo item_\$i; done > $TMP_FILE && cat $TMP_FILE" "item_1
+run_test "for loop redirected" "for i in 1 2; do echo item_\$i; done > \"\$TMP_FILE\" && cat \"\$TMP_FILE\"" "item_1
 item_2"
-rm -f "$TMP_FILE"
 
 # Compound redirections must preserve shell state and restore descriptors.
 run_test "redirected for preserves state" 'x=before; for i in one; do x=after; done > /dev/null; echo "$x"; echo "$i"' "after
@@ -143,6 +164,7 @@ run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 
+# Summary
 echo "================================================"
 echo " Test Suite Finished"
 echo " Passed: $PASSED"
