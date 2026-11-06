@@ -1,0 +1,34 @@
+# Compiled binaries and build output
+bin/
+*.out
+*.exe
+*.o
+*.a
+*.so
+*.dylib
+
+# Goose build artifacts and intermediate caches
+.goose/
+build/
+
+# Temporary and test artifacts
+*.tmp
+*.log
+test_out.txt
+test_err.txt
+
+# Editor and IDE metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python byte code and caches (benchmarks)
+__pycache__/
+*.py[cod]
+
+# Personal environment and local configs
+.env
+*.local
