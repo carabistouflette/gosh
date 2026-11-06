@@ -45,6 +45,16 @@ To evaluate performance impacts:
 ./bench/run_benchmarks.sh
 ```
 
+The runner validates each workload before timing and applies a 10-second timeout
+to each subprocess. Failed checks or runs appear as `FAILED` in the console and
+report, and make the runner exit nonzero. Results distinguish total milliseconds
+from mean milliseconds per run.
+
+Run the focused benchmark-runner tests without Goose or a built GOSH binary:
+```bash
+python3 -m unittest discover -s test -p 'test_benchmark.py' -v
+```
+
 ---
 
 ## Architectural Principles
