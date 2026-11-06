@@ -105,6 +105,30 @@ run_test "for loop redirected" "for i in 1 2; do echo item_\$i; done > $TMP_FILE
 item_2"
 rm -f "$TMP_FILE"
 
+# Compound redirections must preserve shell state and restore descriptors.
+run_test "redirected for preserves state" 'x=before; for i in one; do x=after; done > /dev/null; echo "$x"; echo "$i"' "after
+one"
+run_test "redirected if preserves state" 'x=before; if test 1 -eq 1; then x=after; echo hidden; fi > /dev/null; echo "$x"' "after"
+run_test "redirected else preserves state" 'x=before; if test 1 -eq 2; then x=wrong; else x=after; fi > /dev/null; echo "$x"' "after"
+run_test "redirected while preserves state" 'c=0; while test $c -lt 2; do c=$((c + 1)); echo hidden; done > /dev/null; echo "$c"' "2"
+run_test "compound restores stdout after body failure" 'if test 1 -eq 1; then test 1 -eq 2; fi > /dev/null; echo "$?"; echo visible' "1
+visible"
+run_test "redirected subshell still isolates state" 'x=before; (x=after; echo hidden) > /dev/null; echo "$x"' "before"
+
+# A file cannot be traversed as a directory: deterministic failing paths.
+echo fixture > "$TMP_FILE"
+run_test "for redirect failure skips body and restores stdout" "x=before; for i in one; do x=after; done > /dev/null < $TMP_FILE/missing; echo \$?; echo \$x" "1
+before"
+run_test "if redirect failure skips condition and body" "x=before; if x=condition; then x=after; fi > /dev/null < $TMP_FILE/missing; echo \$?; echo \$x" "1
+before"
+run_test "while redirect failure skips condition and body" "x=before; while x=condition; test 1 -eq 2; do x=after; done > /dev/null < $TMP_FILE/missing; echo \$?; echo \$x" "1
+before"
+run_test "compound output open failure" "x=before; for i in one; do x=after; done > /dev/null > $TMP_FILE/missing; echo \$?; echo \$x" "1
+before"
+run_test "compound restores stderr after partial failure" "for i in one; do echo wrong; done > /dev/null 2> $TMP_ERR < $TMP_FILE/missing; echo \$?; sh -c 'echo restored >&2'" "1
+restored"
+rm -f "$TMP_FILE" "$TMP_ERR"
+
 # 10. Functions and Aliases
 run_test "shell function" "greet() { echo \"Hello, \$1!\"; }; greet Gosh" "Hello, Gosh!"
 run_test "alias expansion" "alias hi='echo welcome' && hi" "welcome"

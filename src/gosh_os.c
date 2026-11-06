@@ -622,6 +622,46 @@ void gosh_redirect_end(const int32_t *saved_fds) {
     }
 }
 
+/* Save above stdio even when one of 0..2 is closed. Do not leak backups to exec. */
+int32_t gosh_save_stdio(int32_t *saved_fds) {
+    fflush(stdout);
+    fflush(stderr);
+    for (int i = 0; i < 3; i++) saved_fds[i] = -1;
+    for (int i = 0; i < 3; i++) {
+        int fd;
+        do {
+            fd = fcntl(i, F_DUPFD_CLOEXEC, 3);
+        } while (fd < 0 && errno == EINTR);
+        if (fd < 0 && errno != EBADF) {
+            for (int j = 0; j < i; j++) {
+                if (saved_fds[j] >= 0) close(saved_fds[j]);
+            }
+            return -1;
+        }
+        saved_fds[i] = fd;
+    }
+    return 0;
+}
+
+int32_t gosh_restore_stdio(const int32_t *saved_fds) {
+    fflush(stdout);
+    fflush(stderr);
+    int32_t status = 0;
+    for (int i = 0; i < 3; i++) {
+        if (saved_fds[i] >= 0) {
+            if (gosh_dup2(saved_fds[i], i) < 0) status = -1;
+            close(saved_fds[i]);
+        } else {
+            if (close(i) < 0 && errno != EBADF) status = -1;
+        }
+    }
+    /* A write to a temporarily closed stream must not poison later output. */
+    clearerr(stdin);
+    clearerr(stdout);
+    clearerr(stderr);
+    return status;
+}
+
 int32_t gosh_get_git_branch(gosh_mut_slice_u8 out) {
     char path[512] = ".git/HEAD";
     int fd = -1;
@@ -717,7 +757,11 @@ int32_t gosh_pipe(int32_t *fds) {
 }
 
 int32_t gosh_dup2(int32_t oldfd, int32_t newfd) {
-    return dup2(oldfd, newfd);
+    int result;
+    do {
+        result = dup2(oldfd, newfd);
+    } while (result < 0 && errno == EINTR);
+    return result;
 }
 
 void gosh_close(int32_t fd) {

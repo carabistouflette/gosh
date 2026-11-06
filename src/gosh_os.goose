@@ -65,6 +65,10 @@ extern fn gosh_redirect_begin(
 
 extern fn gosh_redirect_end(saved_fds: const i32&);
 
+// Snapshot/restore all three standard descriptors for compound commands.
+extern fn gosh_save_stdio(saved_fds: i32&) -> i32;
+extern fn gosh_restore_stdio(saved_fds: const i32&) -> i32;
+
 extern fn gosh_get_git_branch(out: u8[:]) -> i32;
 extern fn gosh_init_signals();
 extern fn gosh_reset_signals();

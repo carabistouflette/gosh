@@ -93,6 +93,10 @@ int32_t gosh_redirect_begin(
 
 void gosh_redirect_end(const int32_t *saved_fds);
 
+/* Compound descriptor scopes: -1 records an originally closed descriptor. */
+int32_t gosh_save_stdio(int32_t *saved_fds);
+int32_t gosh_restore_stdio(const int32_t *saved_fds);
+
 /* Git branch detection: reads .git/HEAD directly */
 int32_t gosh_get_git_branch(gosh_mut_slice_u8 out);
 
