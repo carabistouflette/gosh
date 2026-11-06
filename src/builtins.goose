@@ -446,45 +446,51 @@ fn builtin_printf(args: const u8[..128][..16]&) -> i32 {
     var arg_idx = 2;
     var out_buf: u8[>..] = [];
 
-    var i = 0;
-    while i < fmt_str.len {
-        let c = fmt_str[i];
-        if c == '%' && i + 1 < fmt_str.len {
-            let spec = fmt_str[i + 1];
-            if spec == 's' {
-                if arg_idx < args.len {
-                    out_buf.append(args[arg_idx]);
-                    arg_idx++;
+    while true {
+        let cycle_start = arg_idx;
+        var i = 0;
+        while i < fmt_str.len {
+            let c = fmt_str[i];
+            if c == '%' && i + 1 < fmt_str.len {
+                let spec = fmt_str[i + 1];
+                if spec == 's' {
+                    if arg_idx < args.len {
+                        out_buf.append(args[arg_idx]);
+                        arg_idx++;
+                    }
+                    i += 2;
+                    continue;
                 }
-                i += 2;
-                continue;
-            }
-            if spec == 'd' || spec == 'i' {
-                if arg_idx < args.len {
-                    let num, ok = parse_int(args[arg_idx]);
-                    format(out_buf, if ok { num } else { 0 });
-                    arg_idx++;
-                } else {
-                    out_buf.push('0');
+                if spec == 'd' || spec == 'i' {
+                    if arg_idx < args.len {
+                        let num, ok = parse_int(args[arg_idx]);
+                        format(out_buf, if ok { num } else { 0 });
+                        arg_idx++;
+                    } else {
+                        out_buf.push('0');
+                    }
+                    i += 2;
+                    continue;
                 }
-                i += 2;
-                continue;
+                if spec == '%' {
+                    out_buf.push('%');
+                    i += 2;
+                    continue;
+                }
             }
-            if spec == '%' {
-                out_buf.push('%');
-                i += 2;
-                continue;
+            if c == '\\' && i + 1 < fmt_str.len {
+                let esc = fmt_str[i + 1];
+                if esc == 'n' { out_buf.push('\n'); i += 2; continue; }
+                if esc == 't' { out_buf.push('\t'); i += 2; continue; }
+                if esc == 'r' { out_buf.push('\r'); i += 2; continue; }
+                if esc == '\\' { out_buf.push('\\'); i += 2; continue; }
             }
+            out_buf.push(c);
+            i++;
         }
-        if c == '\\' && i + 1 < fmt_str.len {
-            let esc = fmt_str[i + 1];
-            if esc == 'n' { out_buf.push('\n'); i += 2; continue; }
-            if esc == 't' { out_buf.push('\t'); i += 2; continue; }
-            if esc == 'r' { out_buf.push('\r'); i += 2; continue; }
-            if esc == '\\' { out_buf.push('\\'); i += 2; continue; }
-        }
-        out_buf.push(c);
-        i++;
+
+        // Repeat only when this pass consumed arguments and more remain.
+        if arg_idx >= args.len || arg_idx == cycle_start { break; }
     }
 
     write_stdout(out_buf);

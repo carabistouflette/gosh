@@ -159,6 +159,20 @@ run_test "unalias builtin" "alias foo='echo 1' && unalias foo && alias | grep fo
 run_test "export and read env" "export GOSH_TEST_ENV=42 && echo \$GOSH_TEST_ENV" "42"
 run_test "unset variable" "VAR=10 && unset VAR && echo \"[\$VAR]\"" "[]"
 run_test "printf builtin" "printf 'num:%d str:%s\n' 42 'awesome'" "num:42 str:awesome"
+# Format reuse completes each pass, defaulting missing operands to empty/zero.
+run_test "printf reuse string lines" "printf '%s\n' one two three" $'one\ntwo\nthree'
+run_test "printf reuse partial string cycle" "printf '[%s:%s]' one two three" "[one:two][three:]"
+run_test "printf reuse mixed conversions" "printf '%s:%d:%i;' one 2 3 four 5 6" "one:2:3;four:5:6;"
+run_test "printf reuse partial numeric cycle" "printf '%s:%d:%i;' one 2 3 four" "one:2:3;four:0:0;"
+run_test "printf missing arguments" "printf '[%s:%d:%i]'" "[:0:0]"
+run_test "printf reuse empty string operand" "printf '[%s]' '' two" "[][two]"
+run_test "printf reuse literal percent" "printf '%%[%s]' one two" "%[one]%[two]"
+run_test "printf reuse escaped tab" "printf '%s\t%d;' one 2 three 4" $'one\t2;three\t4;'
+run_test "printf literal format ignores operands" "printf 'literal' one two" "literal"
+run_test "printf percent-only format ignores operands" "printf '%%' one two" "%"
+run_test "printf escapes-only format ignores operands" "printf '\t' one two" $'\t'
+run_test "printf empty format ignores operands" "printf '' one two" ""
+run_test "printf empty format without operands" "printf ''" ""
 run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 
 # 12. Background Jobs
