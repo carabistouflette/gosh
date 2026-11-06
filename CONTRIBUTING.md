@@ -12,7 +12,7 @@ To build and contribute to GOSH, you will need:
    - Verify with: `goose version`
 2. **C Toolchain**: A standard C compiler (`gcc` or `clang`), required by Goose for compiling the native C interop layer and producing the final ELF binary.
    - Verify with: `gcc --version` or `clang --version`
-3. **Python 3**: (Optional, for benchmarks) Python 3.8+ to run the benchmark suite.
+3. **Python 3**: Python 3.8+ for runner validation and the optional benchmark suite.
    - Verify with: `python3 --version`
 
 ---
@@ -37,7 +37,25 @@ Always run the automated test suite before committing changes:
 ```bash
 ./test/test_suite.sh
 ```
-All tests must pass. If adding a new feature or fixing a bug, please add corresponding test cases to `test/test_suite.sh`.
+The Bash runner finds `bin/gosh` relative to the repository, regardless of your working directory. To test another build:
+```bash
+GOSH="/path/to/custom build/gosh" ./test/test_suite.sh
+```
+`GOSH` must be an executable file path, absolute or relative to your working directory. Invalid paths fail early with build or permission instructions. Temporary files use `${TMPDIR:-/tmp}` and are removed on exit.
+
+Add cases to `test/test_suite.sh` for new features and fixes. Each case checks combined stdout/stderr (ignoring trailing newlines) and exit status:
+```bash
+run_test "description" "command" "expected output"  # expects status 0
+run_test "explicit failure" "exit 7" "" 7
+```
+A mismatch in either output or status fails the case; the runner continues and exits nonzero after reporting the totals.
+
+Validate the runner itself without Goose or a built GOSH binary:
+```bash
+bash -n test/test_suite.sh
+python3 test/test_runner.py
+```
+Runner checks use stand-in executables; also run the suite against a real GOSH build before submitting.
 
 ### 4. Running Benchmarks
 To evaluate performance impacts:
