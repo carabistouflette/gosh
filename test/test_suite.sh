@@ -164,6 +164,23 @@ run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 
+# Pathname expansion: isolate names and creation order from the checkout.
+mkdir -p "$TEST_TMP_DIR/globs/fixtures/sub" "$TEST_TMP_DIR/globs/.hidden"
+touch "$TEST_TMP_DIR/globs/fixtures/z.txt" "$TEST_TMP_DIR/globs/fixtures/A.txt" \
+    "$TEST_TMP_DIR/globs/fixtures/a.txt" "$TEST_TMP_DIR/globs/fixtures/.secret.txt" \
+    "$TEST_TMP_DIR/globs/fixtures/sub/b.txt" "$TEST_TMP_DIR/globs/.hidden/x.txt"
+export GLOB_ROOT="$TEST_TMP_DIR/globs"
+run_test "glob literal relative prefix and C ordering" 'cd "$GLOB_ROOT"; echo fixtures/*.txt' 'fixtures/A.txt fixtures/a.txt fixtures/z.txt'
+run_test "glob absolute prefix" 'echo $GLOB_ROOT/fixtures/?.txt' "$GLOB_ROOT/fixtures/A.txt $GLOB_ROOT/fixtures/a.txt $GLOB_ROOT/fixtures/z.txt"
+run_test "glob wildcard directory components" 'cd "$GLOB_ROOT"; echo */*/*.txt' 'fixtures/sub/b.txt'
+run_test "glob explicit dot component" 'cd "$GLOB_ROOT"; echo .hidden/*.txt fixtures/.*.txt' '.hidden/x.txt fixtures/.secret.txt'
+run_test "glob unmatched patterns stay literal" 'cd "$GLOB_ROOT"; echo missing/*.txt fixtures/no?.txt' 'missing/*.txt fixtures/no?.txt'
+run_test "glob trailing slash requires directory" 'cd "$GLOB_ROOT"; echo fixtures/*/' 'fixtures/sub/'
+run_test "glob quoted pattern stays literal" 'cd "$GLOB_ROOT"; echo "fixtures/*.txt"' 'fixtures/*.txt'
+mkdir "$TEST_TMP_DIR/globs/many"
+for i in {1..16}; do touch "$TEST_TMP_DIR/globs/many/$i"; done
+run_test "glob capacity fails before command executes" 'cd "$GLOB_ROOT"; echo many/*' 'gosh: pathname expansion exceeds capacity' 2
+
 # Summary
 echo "================================================"
 echo " Test Suite Finished"

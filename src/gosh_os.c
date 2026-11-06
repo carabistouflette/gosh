@@ -128,7 +128,7 @@ int32_t gosh_file_exists(gosh_slice_u8 path) {
     return (stat(pbuf, &st) == 0) ? 1 : 0;
 }
 
-int32_t gosh_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out) {
+static int32_t list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out, char separator) {
     char pbuf[4096];
     slice_to_cstr(path, pbuf, sizeof(pbuf));
     DIR *d = opendir(pbuf[0] ? pbuf : ".");
@@ -141,15 +141,26 @@ int32_t gosh_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out) {
             continue;
         }
         int name_len = (int)strlen(ent->d_name);
-        if (written + name_len + 1 >= out.len) {
-            break;
+        if (written + name_len + 1 > out.len) {
+            if (separator == '\n') break;
+            closedir(d);
+            return -2;
         }
         memcpy(out.data + written, ent->d_name, name_len);
         written += name_len;
-        out.data[written++] = '\n';
+        out.data[written++] = separator;
     }
     closedir(d);
     return written;
+}
+
+/* Completion keeps its existing newline protocol; globbing uses NUL names. */
+int32_t gosh_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out) {
+    return list_dir(path, out, '\n');
+}
+
+int32_t gosh_glob_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out) {
+    return list_dir(path, out, '\0');
 }
 
 int32_t gosh_setenv(gosh_slice_u8 key, gosh_slice_u8 val) {

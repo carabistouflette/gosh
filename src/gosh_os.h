@@ -32,6 +32,7 @@ int32_t gosh_getcwd(gosh_mut_slice_u8 out);
 int32_t gosh_is_dir(gosh_slice_u8 path);
 int32_t gosh_is_executable(gosh_slice_u8 path);
 int32_t gosh_file_exists(gosh_slice_u8 path);
+int32_t gosh_glob_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out);
 int32_t gosh_list_dir(gosh_slice_u8 path, gosh_mut_slice_u8 out);
 
 /* Environment */

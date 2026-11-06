@@ -227,7 +227,7 @@ jobs
   - Double quotes (`"..."`): Interpolate variables, command substitutions, and arithmetic while disabling globbing.
 - **Arithmetic Expansion**: `$(( expr ))` with `+`, `-`, `*`, `/`, `%`, and parenthesized sub-expressions.
 - **Command Substitution**: `$(command)` and `` `command` `` capturing output from subshells.
-- **Filesystem Globbing**: Path wildcard matching for `*` and `?`.
+- **Filesystem Globbing**: Component-wise path matching for `*` and `?`, including literal relative/absolute directory prefixes. Hidden names require a component starting with `.`; unmatched patterns stay literal. Matches use bytewise C-locale ordering regardless of locale settings. Expansion fails with status 2 rather than truncating when it exceeds 16 total arguments, a 128-byte matched path, or an 8192-byte directory listing. Recursive `**` and bracket patterns are not supported.
 - **Tilde Expansion**: `~` and `~/path` expanding to user `$HOME`.
 
 ---

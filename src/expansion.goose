@@ -510,48 +510,89 @@ fn expand_word(state: const ShellState&, word: const u8[:], out: u8[..128]&) {
     }
 }
 
-// Expand a word list with globbing and variable expansion
-fn expand_arguments(state: const ShellState&, raw_args: const u8[..128][..16]&, expanded_args: u8[..128][..16]&) {
-    expanded_args.clear();
+// Bytewise ordering (LC_ALL=C), independent of the process locale.
+fn glob_less(a: const u8[:], b: const u8[:]) -> bool {
+    var i = 0;
+    while i < a.len && i < b.len {
+        if a[i] != b[i] { return a[i] < b[i]; }
+        i++;
+    }
+    return a.len < b.len;
+}
 
+// Walk one path component at a time. Literal prefixes retain their spelling.
+// false means a fixed expansion buffer could not represent the complete result.
+recursive fn glob_paths(pattern: const u8[:], prefix: const u8[:], matches: u8[..128][..16]&) -> bool {
+    if pattern.len == 0 {
+        if gosh_file_exists(prefix) != 0 {
+            if matches.len >= 16 { return false; }
+            var word: u8[..128] = [];
+            format(word, prefix);
+            matches.push(word);
+        }
+        return true;
+    }
+    var end = 0;
+    while end < pattern.len && pattern[end] != '/' { end++; }
+    let component = pattern[..end];
+    let has_slash = end < pattern.len;
+    let rest = if has_slash { pattern[end + 1..] } else { pattern[end..] };
+    let wild = find(component, "*") >= 0 || find(component, "?") >= 0;
+    if !wild {
+        if prefix.len + component.len + (if has_slash { 1 } else { 0 }) > 128 { return false; }
+        var path: u8[..128] = [];
+        format(path, prefix, component);
+        if has_slash { path.push('/'); }
+        return glob_paths(rest, path, matches);
+    }
+
+    var entries: u8[8192] = [0; 8192];
+    let n = gosh_glob_list_dir(prefix, entries);
+    if n == -2 { return false; }
+    if n < 0 { return true; }
+    var complete = true;
+    each_split(entries[..n], '\0') {
+        if it.len > 0 && (it[0] != '.' || component[0] == '.') && glob_match(component, it) {
+            if prefix.len + it.len + (if has_slash { 1 } else { 0 }) > 128 {
+                complete = false;
+            } else if complete {
+                var path: u8[..128] = [];
+                format(path, prefix, it);
+                if has_slash { path.push('/'); }
+                if !has_slash {
+                    if matches.len >= 16 { complete = false; }
+                    else { matches.push(path); }
+                } else if !glob_paths(rest, path, matches) { complete = false; }
+            }
+        }
+    };
+    return complete;
+}
+
+// Expand a word list with globbing and variable expansion.
+fn expand_arguments(state: const ShellState&, raw_args: const u8[..128][..16]&, expanded_args: u8[..128][..16]&) -> bool {
+    expanded_args.clear();
     for arg in raw_args {
         var exp: u8[..128] = [];
         expand_word(state, arg, exp);
-
-        // Only glob if the argument was not quoted
-        let is_quoted = (starts_with(arg, "\"") || starts_with(arg, "'"));
-
-        // Check if contains glob pattern (* or ?)
+        let is_quoted = starts_with(arg, "\"") || starts_with(arg, "'");
+        var matches: u8[..128][..16] = [];
         if !is_quoted && (find(exp, "*") >= 0 || find(exp, "?") >= 0) {
-            // List current directory and match entries
-            var dir_buf: u8[8192] = [0; 8192];
-            let list_len = gosh_list_dir(".", dir_buf);
-            var match_count = 0;
-
-            if list_len > 0 {
-                let dir_text = dir_buf[..list_len];
-                each_split(dir_text, '\n') {
-                    if it.len > 0 && glob_match(exp, it) {
-                        var match_word: u8[..128] = [];
-                        format(match_word, it);
-                        if expanded_args.len < 16 {
-                            expanded_args.push(match_word);
-                            match_count++;
-                        }
-                    }
-                };
-            }
-
-            if match_count == 0 {
-                // No matches: keep pattern as literal argument (standard POSIX)
-                if expanded_args.len < 16 {
-                    expanded_args.push(exp);
+            if !glob_paths(exp, "", matches) { return false; }
+            // Insertion sort over the bounded result set.
+            for i in matches.len {
+                var j = i;
+                while j > 0 && glob_less(matches[j], matches[j - 1]) {
+                    let tmp = matches[j];
+                    matches[j] = matches[j - 1];
+                    matches[j - 1] = tmp;
+                    j--;
                 }
             }
-        } else {
-            if expanded_args.len < 16 {
-                expanded_args.push(exp);
-            }
         }
+        if matches.len == 0 { matches.push(exp); }
+        if expanded_args.len + matches.len > 16 { return false; }
+        for word in matches { expanded_args.push(word); }
     }
+    return true;
 }

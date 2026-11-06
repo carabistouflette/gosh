@@ -88,3 +88,5 @@ extern fn gosh_setpgid(pid: i32, pgid: i32) -> i32;
 extern fn gosh_tcsetpgrp(fd: i32, pgrp: i32) -> i32;
 extern fn gosh_tcgetpgrp(fd: i32) -> i32;
 extern fn gosh_poll_job(pid: i32, status: i32&) -> i32;
+
+extern fn gosh_glob_list_dir(path: const u8[:], out: u8[:]) -> i32;
