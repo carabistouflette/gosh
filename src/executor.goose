@@ -61,7 +61,7 @@ recursive fn dispatch_builtin(state: ShellState&, cmd: const u8[:], args: const 
     return 1;
 }
 
-// Apply redirections in a forked child process
+// Apply redirections in source order; callers in the shell must save/restore stdio.
 fn apply_redirections(state: ShellState&, redirs: const Redirection[..4]&) -> bool {
     for r in redirs {
         var exp_target: u8[..128] = [];
@@ -73,51 +73,57 @@ fn apply_redirections(state: ShellState&, redirs: const Redirection[..4]&) -> bo
                 print("gosh: ", exp_target, ": No such file or directory");
                 return false;
             }
-            gosh_dup2(fd, 0);
-            gosh_close(fd);
+            let result = gosh_dup2(fd, 0);
+            if fd != 0 { gosh_close(fd); }
+            if result < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_OUT {
             let fd = gosh_open_file(exp_target, 1);
             if fd < 0 {
                 print("gosh: cannot create ", exp_target);
                 return false;
             }
-            gosh_dup2(fd, 1);
-            gosh_close(fd);
+            let result = gosh_dup2(fd, 1);
+            if fd != 1 { gosh_close(fd); }
+            if result < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_APP {
             let fd = gosh_open_file(exp_target, 2);
             if fd < 0 {
                 print("gosh: cannot create ", exp_target);
                 return false;
             }
-            gosh_dup2(fd, 1);
-            gosh_close(fd);
+            let result = gosh_dup2(fd, 1);
+            if fd != 1 { gosh_close(fd); }
+            if result < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_ERR {
             let fd = gosh_open_file(exp_target, 1);
             if fd < 0 {
                 print("gosh: cannot create ", exp_target);
                 return false;
             }
-            gosh_dup2(fd, 2);
-            gosh_close(fd);
+            let result = gosh_dup2(fd, 2);
+            if fd != 2 { gosh_close(fd); }
+            if result < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_ERR_APP {
             let fd = gosh_open_file(exp_target, 2);
             if fd < 0 {
                 print("gosh: cannot create ", exp_target);
                 return false;
             }
-            gosh_dup2(fd, 2);
-            gosh_close(fd);
+            let result = gosh_dup2(fd, 2);
+            if fd != 2 { gosh_close(fd); }
+            if result < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_E2O {
-            gosh_dup2(1, 2);
+            if gosh_dup2(1, 2) < 0 { return false; }
         } else if r.kind == TOKEN_REDIR_BOTH {
             let fd = gosh_open_file(exp_target, 1);
             if fd < 0 {
                 print("gosh: cannot create ", exp_target);
                 return false;
             }
-            gosh_dup2(fd, 1);
-            gosh_dup2(fd, 2);
-            gosh_close(fd);
+            let out_result = gosh_dup2(fd, 1);
+            let err_result = gosh_dup2(fd, 2);
+            if fd != 1 && fd != 2 { gosh_close(fd); }
+            if out_result < 0 || err_result < 0 { return false; }
         }
     }
     return true;
@@ -450,6 +456,44 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
     return last_status;
 }
 
+// Control flow runs in the current shell; its caller owns descriptor cleanup.
+recursive fn execute_compound_statement(state: ShellState&, stmt: const Statement&) -> i32 {
+    if stmt.kind == STMT_IF {
+        let cond_res = execute_script(state, stmt.cond_text);
+        if cond_res == 0 {
+            return execute_script(state, stmt.body_text);
+        } else if stmt.else_text.len > 0 {
+            return execute_script(state, stmt.else_text);
+        }
+        return 0;
+    }
+
+    if stmt.kind == STMT_WHILE {
+        var last: i32 = 0;
+        loop {
+            if !state.running { break; }
+            let cond_res = execute_script(state, stmt.cond_text);
+            if cond_res != 0 { break; }
+            last = execute_script(state, stmt.body_text);
+        }
+        return last;
+    }
+
+    if stmt.kind == STMT_FOR {
+        var last: i32 = 0;
+        for w in stmt.for_words {
+            if !state.running { break; }
+            var exp_w: u8[..128] = [];
+            expand_word(state, w, exp_w);
+            set_var(state, stmt.for_var, exp_w, false);
+            last = execute_script(state, stmt.body_text);
+        }
+        return last;
+    }
+
+    return 0;
+}
+
 // Execute a single AST statement (Pipeline, IF, WHILE, FOR, FUNCTION, SUBSHELL)
 recursive fn execute_statement(state: ShellState&, stmt: const Statement&) -> i32 {
     if stmt.kind == STMT_PIPELINE {
@@ -470,88 +514,19 @@ recursive fn execute_statement(state: ShellState&, stmt: const Statement&) -> i3
         return gosh_wait_pid(pid);
     }
 
-    if stmt.kind == STMT_IF {
-        if stmt.redirs.len > 0 {
-            let pid = gosh_fork();
-            if pid < 0 { return -1; }
-            if pid == 0 {
-                gosh_reset_signals();
-                if !apply_redirections(state, stmt.redirs) { gosh_exit(1); }
-                let cond_res = execute_script(state, stmt.cond_text);
-                if cond_res == 0 {
-                    gosh_exit(execute_script(state, stmt.body_text));
-                } else if stmt.else_text.len > 0 {
-                    gosh_exit(execute_script(state, stmt.else_text));
-                }
-                gosh_exit(0);
-            }
-            return gosh_wait_pid(pid);
+    if stmt.kind == STMT_IF || stmt.kind == STMT_WHILE || stmt.kind == STMT_FOR {
+        if stmt.redirs.len == 0 {
+            return execute_compound_statement(state, stmt);
         }
-        let cond_res = execute_script(state, stmt.cond_text);
-        if cond_res == 0 {
-            return execute_script(state, stmt.body_text);
-        } else if stmt.else_text.len > 0 {
-            return execute_script(state, stmt.else_text);
+        var saved_fds: i32[3] = [-1, -1, -1];
+        if gosh_save_stdio(saved_fds[0]) < 0 { return 1; }
+        var status: i32 = 1;
+        if apply_redirections(state, stmt.redirs) {
+            status = execute_compound_statement(state, stmt);
         }
-        return 0;
-    }
-
-    if stmt.kind == STMT_WHILE {
-        if stmt.redirs.len > 0 {
-            let pid = gosh_fork();
-            if pid < 0 { return -1; }
-            if pid == 0 {
-                gosh_reset_signals();
-                if !apply_redirections(state, stmt.redirs) { gosh_exit(1); }
-                var last: i32 = 0;
-                loop {
-                    if !state.running { break; }
-                    let cond_res = execute_script(state, stmt.cond_text);
-                    if cond_res != 0 { break; }
-                    last = execute_script(state, stmt.body_text);
-                }
-                gosh_exit(last);
-            }
-            return gosh_wait_pid(pid);
-        }
-        var last: i32 = 0;
-        loop {
-            if !state.running { break; }
-            let cond_res = execute_script(state, stmt.cond_text);
-            if cond_res != 0 { break; }
-            last = execute_script(state, stmt.body_text);
-        }
-        return last;
-    }
-
-    if stmt.kind == STMT_FOR {
-        if stmt.redirs.len > 0 {
-            let pid = gosh_fork();
-            if pid < 0 { return -1; }
-            if pid == 0 {
-                gosh_reset_signals();
-                if !apply_redirections(state, stmt.redirs) { gosh_exit(1); }
-                var last: i32 = 0;
-                for w in stmt.for_words {
-                    if !state.running { break; }
-                    var exp_w: u8[..128] = [];
-                    expand_word(state, w, exp_w);
-                    set_var(state, stmt.for_var, exp_w, false);
-                    last = execute_script(state, stmt.body_text);
-                }
-                gosh_exit(last);
-            }
-            return gosh_wait_pid(pid);
-        }
-        var last: i32 = 0;
-        for w in stmt.for_words {
-            if !state.running { break; }
-            var exp_w: u8[..128] = [];
-            expand_word(state, w, exp_w);
-            set_var(state, stmt.for_var, exp_w, false);
-            last = execute_script(state, stmt.body_text);
-        }
-        return last;
+        // Also unwind partially applied redirections and nonzero body statuses.
+        if gosh_restore_stdio(saved_fds[0]) < 0 { return 1; }
+        return status;
     }
 
     if stmt.kind == STMT_FUNC {
