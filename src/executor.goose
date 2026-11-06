@@ -311,6 +311,7 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
         packed.push(0);
     }
 
+    if raw_cmd.background && state.jobs.len >= 16 { return 1; }
     var child_pid: i32 = 0;
     let status = gosh_exec_packed(
         packed,
@@ -327,19 +328,10 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
 
     if raw_cmd.background {
         state.last_bg_pid = child_pid;
-        if state.job_count < 16 {
-            var job = ShellJob {
-                id: state.job_count + 1,
-                pid: child_pid,
-                running: true,
-            };
-            format(job.cmd, cmd_name);
-            state.jobs.push(job);
-            state.job_count = state.jobs.len as i32;
-            if state.interactive {
-                print("[", job.id, "] ", job.pid);
-            }
-        }
+        var job = ShellJob { pid: child_pid };
+        job.processes.push(JobProcess { pid: child_pid });
+        format(job.cmd, cmd_name);
+        save_job(state, job);
     }
 
     return status;
@@ -352,6 +344,7 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
     if num_cmds == 1 {
         let cmd = pipe.cmds[0];
         if cmd.background {
+            if state.jobs.len >= 16 { return 1; }
             let pid = gosh_fork();
             if pid < 0 { return -1; }
             if pid == 0 {
@@ -360,28 +353,21 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
                 execute_cmd_in_child(state, cmd);
                 gosh_exit(0);
             }
+            gosh_setpgid(pid, pid);
             state.last_bg_pid = pid;
-            if state.job_count < 16 {
-                var job = ShellJob {
-                    id: state.job_count + 1,
-                    pid: pid,
-                    running: true,
-                };
-                var name: u8[..64] = [];
-                if cmd.argv.len > 0 { format(name, cmd.argv[0]); }
-                format(job.cmd, name);
-                state.jobs.push(job);
-                state.job_count = state.jobs.len as i32;
-                if state.interactive {
-                print("[", job.id, "] ", job.pid);
-            }
-            }
+            var job = ShellJob { pid: pid };
+            job.processes.push(JobProcess { pid: pid });
+            if cmd.argv.len > 0 { format(job.cmd, cmd.argv[0]); }
+            save_job(state, job);
             return 0;
         }
         return execute_single_cmd(state, cmd);
     }
 
-    // Multi-command pipeline
+    // Background pipeline members share one group for fg/bg resumption.
+    let background = pipe.cmds[num_cmds - 1].background;
+    if background && state.jobs.len >= 16 { return 1; }
+    var pgid: i32 = 0;
     var pipes: i32[8] = [-1; 8];
     for k in (num_cmds - 1) {
         gosh_pipe(pipes[k * 2]);
@@ -394,6 +380,7 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
 
         if pid == 0 {
             gosh_reset_signals();
+            if background { gosh_setpgid(0, pgid); }
 
             // Connect input from previous pipe
             if i > 0 {
@@ -414,6 +401,10 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
             gosh_exit(0);
         }
 
+        if background {
+            if pgid == 0 { pgid = pid; }
+            gosh_setpgid(pid, pgid);
+        }
         pids[i] = pid;
     }
 
@@ -422,21 +413,12 @@ recursive fn execute_pipeline(state: ShellState&, pipe: const Pipeline&) -> i32 
         gosh_close(pipes[k]);
     }
 
-    if pipe.cmds[num_cmds - 1].background {
+    if background {
         state.last_bg_pid = pids[num_cmds - 1];
-        if state.job_count < 16 {
-            var job = ShellJob {
-                id: state.job_count + 1,
-                pid: pids[num_cmds - 1],
-                running: true,
-            };
-            format(job.cmd, "pipeline");
-            state.jobs.push(job);
-            state.job_count = state.jobs.len as i32;
-            if state.interactive {
-                print("[", job.id, "] ", job.pid);
-            }
-        }
+        var job = ShellJob { pid: pgid };
+        for i in num_cmds { job.processes.push(JobProcess { pid: pids[i] }); }
+        format(job.cmd, "pipeline");
+        save_job(state, job);
         return 0;
     }
 

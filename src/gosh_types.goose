@@ -110,10 +110,18 @@ struct ShellFunc {
     body: u8[..512] = [],
 }
 
+struct JobProcess {
+    pid: i32 = 0,
+    event: i32 = 0, // gosh_os event ABI; continued processes are runnable
+    status: i32 = 0,
+}
+
 struct ShellJob {
     id: i32 = 0,
     pid: i32 = 0,
-    running: bool = false,
+    processes: JobProcess[..4] = [],
+    event: i32 = 0,
+    status: i32 = 0,
     cmd: u8[..64] = [],
 }
 

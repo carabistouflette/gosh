@@ -794,26 +794,36 @@ int32_t gosh_tcgetpgrp(int32_t fd) {
     return (int32_t)tcgetpgrp(fd);
 }
 
-int32_t gosh_poll_job(int32_t pid, int32_t *status) {
+/* Keep wait event classification identical for polling and foreground waits. */
+static int32_t wait_job(int32_t pid, int32_t *status, int options) {
     int st = 0;
-    pid_t res = waitpid((pid_t)pid, &st, WNOHANG | WUNTRACED | WCONTINUED);
-    if (res == 0) {
-        return 0; /* Still running */
-    } else if (res > 0) {
-        if (status) {
-            if (WIFEXITED(st)) {
-                *status = WEXITSTATUS(st);
-            } else if (WIFSIGNALED(st)) {
-                *status = 128 + WTERMSIG(st);
-            } else {
-                *status = st;
-            }
-        }
-        return 1; /* Terminated or status changed */
+    pid_t res;
+    do {
+        res = waitpid((pid_t)pid, &st, options | WUNTRACED | WCONTINUED);
+    } while (res < 0 && errno == EINTR);
+    if (res < 0) return GOSH_JOB_ERROR;
+    if (res == 0) return GOSH_JOB_RUNNING; /* No event; preserve saved state. */
+    if (WIFEXITED(st) || WIFSIGNALED(st)) {
+        if (status) *status = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+        return GOSH_JOB_COMPLETED;
     }
-    /* If waitpid failed with ECHILD (e.g. called from pipeline subshell), check kill(pid, 0) */
-    if (errno == ECHILD && kill((pid_t)pid, 0) == 0) {
-        return 0; /* Still alive! */
+    if (WIFSTOPPED(st)) {
+        if (status) *status = 128 + WSTOPSIG(st);
+        return GOSH_JOB_STOPPED;
     }
-    return -1; /* No such process */
+    if (WIFCONTINUED(st)) return GOSH_JOB_CONTINUED;
+    return GOSH_JOB_ERROR;
+}
+
+int32_t gosh_poll_job(int32_t pid, int32_t *status) {
+    return wait_job(pid, status, WNOHANG);
+}
+
+int32_t gosh_wait_job(int32_t pid, int32_t *status) {
+    return wait_job(pid, status, 0);
+}
+
+int32_t gosh_continue_job(int32_t pgid) {
+    if (pgid <= 0) return -1;
+    return kill(-(pid_t)pgid, SIGCONT);
 }

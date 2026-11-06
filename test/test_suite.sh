@@ -4,7 +4,15 @@
 
 set -e
 
-GOSH="/home/aditya/gosh/bin/gosh"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GOSH="${GOSH:-$ROOT/bin/gosh}"
+if [ -x "$GOSH" ]; then
+    python3 "$ROOT/test/job_control_test.py" --gosh "$GOSH"
+else
+    python3 "$ROOT/test/job_control_test.py"
+    echo "GOSH binary unavailable: build bin/gosh or set GOSH" >&2
+    exit 1
+fi
 PASSED=0
 FAILED=0
 

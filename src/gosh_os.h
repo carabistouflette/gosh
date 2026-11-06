@@ -116,7 +116,19 @@ int32_t gosh_kill(int32_t pid, int32_t sig);
 int32_t gosh_setpgid(int32_t pid, int32_t pgid);
 int32_t gosh_tcsetpgrp(int32_t fd, int32_t pgrp);
 int32_t gosh_tcgetpgrp(int32_t fd);
+/* Event ABI, mirrored in gosh_os.goose. Status is written only for stopped
+   (128 + stop signal) and completed (exit code or 128 + signal) events.
+   RUNNING means no event, not a state transition. Errors never mean completion. */
+enum {
+    GOSH_JOB_ERROR = -1,
+    GOSH_JOB_RUNNING = 0,
+    GOSH_JOB_COMPLETED = 1,
+    GOSH_JOB_STOPPED = 2,
+    GOSH_JOB_CONTINUED = 3
+};
 int32_t gosh_poll_job(int32_t pid, int32_t *status);
+int32_t gosh_wait_job(int32_t pid, int32_t *status);
+int32_t gosh_continue_job(int32_t pgid);
 
 #ifdef __cplusplus
 }

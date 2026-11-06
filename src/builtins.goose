@@ -492,19 +492,82 @@ fn builtin_printf(args: const u8[..128][..16]&) -> i32 {
     return 0;
 }
 
-// Poll active background jobs and report completed ones
+// Aggregate only after observing each member: a pipeline is complete only
+// when every member completed, and stopped when every live member stopped.
+fn update_job(job: ShellJob&, blocking: bool) -> bool {
+    var completed = 0;
+    var stopped = 0;
+    var continued = false;
+    for &proc in job.processes {
+        if proc.event != GOSH_JOB_COMPLETED {
+            loop {
+                var status: i32 = 0;
+                let event = if blocking { gosh_wait_job(proc.pid, status) }
+                            else { gosh_poll_job(proc.pid, status) };
+                if event == GOSH_JOB_ERROR { return false; }
+                if event == GOSH_JOB_RUNNING { break; }
+                proc.event = event;
+                if event == GOSH_JOB_STOPPED || event == GOSH_JOB_COMPLETED {
+                    proc.status = status;
+                }
+                if event == GOSH_JOB_STOPPED || event == GOSH_JOB_COMPLETED { break; }
+            }
+        }
+        if proc.event == GOSH_JOB_COMPLETED { completed++; }
+        else if proc.event == GOSH_JOB_STOPPED { stopped++; }
+        else if proc.event == GOSH_JOB_CONTINUED { continued = true; }
+    }
+    if completed == job.processes.len {
+        job.event = GOSH_JOB_COMPLETED;
+        job.status = job.processes[job.processes.len - 1].status;
+    } else if completed + stopped == job.processes.len {
+        job.event = GOSH_JOB_STOPPED;
+        for proc in job.processes {
+            if proc.event == GOSH_JOB_STOPPED { job.status = proc.status; }
+        }
+    } else {
+        job.event = if continued { GOSH_JOB_CONTINUED } else { GOSH_JOB_RUNNING };
+    }
+    return true;
+}
+
+fn mark_job_continued(job: ShellJob&) {
+    for &proc in job.processes {
+        if proc.event != GOSH_JOB_COMPLETED { proc.event = GOSH_JOB_CONTINUED; }
+    }
+    job.event = GOSH_JOB_CONTINUED;
+}
+
+// Restore the actual previous terminal owner on every return path.
+fn wait_foreground_job(job: ShellJob&) -> i32 {
+    let owner = gosh_tcgetpgrp(0);
+    if owner >= 0 && gosh_tcsetpgrp(0, job.pid) != 0 { return 1; }
+    var result: i32 = 1;
+    if gosh_continue_job(job.pid) == 0 {
+        mark_job_continued(job);
+        if update_job(job, true) { result = job.status; }
+    }
+    if owner >= 0 && gosh_tcsetpgrp(0, owner) != 0 { return 1; }
+    return result;
+}
+
+fn save_job(state: ShellState&, job: ShellJob&) {
+    job.id = state.job_count + 1;
+    state.jobs.push(job);
+    state.job_count = state.jobs.len as i32;
+    if state.interactive {
+        print("[", job.id, "] ", job.pid);
+    }
+}
+
 fn poll_jobs(state: ShellState&) {
     var k: i64 = 0;
     while k < state.jobs.len {
-        var status: i32 = 0;
-        let res = gosh_poll_job(state.jobs[k].pid, status);
-        if res == 1 {
+        // A wait error is not evidence of completion. Keep the job resumable.
+        if update_job(state.jobs[k], false) && state.jobs[k].event == GOSH_JOB_COMPLETED {
             if state.interactive {
                 print("[", state.jobs[k].id, "]+ Done                    ", state.jobs[k].cmd);
             }
-            remove_at(state.jobs, k);
-            state.job_count = state.jobs.len as i32;
-        } else if res == -1 {
             remove_at(state.jobs, k);
             state.job_count = state.jobs.len as i32;
         } else {
@@ -517,7 +580,11 @@ fn poll_jobs(state: ShellState&) {
 fn builtin_jobs(state: ShellState&) -> i32 {
     poll_jobs(state);
     for j in state.jobs {
-        print("[", j.id, "]+ Running                 ", j.cmd, " &");
+        if j.event == GOSH_JOB_STOPPED {
+            print("[", j.id, "]+ Stopped                 ", j.cmd);
+        } else {
+            print("[", j.id, "]+ Running                 ", j.cmd, " &");
+        }
     }
     return 0;
 }
@@ -558,19 +625,11 @@ fn builtin_fg(state: ShellState&, args: const u8[..128][..16]&) -> i32 {
     let job = state.jobs[job_idx];
     print(job.cmd);
 
-    if gosh_term_isatty(0) != 0 {
-        gosh_tcsetpgrp(0, job.pid);
+    let st = wait_foreground_job(state.jobs[job_idx]);
+    if state.jobs[job_idx].event == GOSH_JOB_COMPLETED {
+        remove_at(state.jobs, job_idx);
+        state.job_count = state.jobs.len as i32;
     }
-
-    gosh_kill(job.pid, 18); // SIGCONT
-    let st = gosh_wait_pid(job.pid);
-
-    if gosh_term_isatty(0) != 0 {
-        gosh_tcsetpgrp(0, gosh_get_pid());
-    }
-
-    remove_at(state.jobs, job_idx);
-    state.job_count = state.jobs.len as i32;
     return st;
 }
 
@@ -608,7 +667,11 @@ fn builtin_bg(state: ShellState&, args: const u8[..128][..16]&) -> i32 {
     }
 
     let job = state.jobs[job_idx];
-    gosh_kill(job.pid, 18); // SIGCONT
+    if gosh_continue_job(job.pid) != 0 {
+        print("gosh: bg: unable to continue job");
+        return 1;
+    }
+    mark_job_continued(state.jobs[job_idx]);
     print("[", job.id, "]+ ", job.cmd, " &");
     return 0;
 }
