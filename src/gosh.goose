@@ -160,7 +160,12 @@ fn main() {
             var cmd_str: u8[>..] = [];
             arg(2, cmd_str);
             format(state.script_name, "gosh");
-            for i in 3..argc {
+            if argc > 3 {
+                var command_name: u8[>..] = [];
+                arg(3, command_name);
+                format(state.script_name, command_name);
+            }
+            for i in 4..argc {
                 var a: u8[>..] = [];
                 arg(i, a);
                 var s_arg: u8[..128] = [];

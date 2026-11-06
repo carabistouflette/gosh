@@ -161,6 +161,13 @@ run_test "unset variable" "VAR=10 && unset VAR && echo \"[\$VAR]\"" "[]"
 run_test "printf builtin" "printf 'num:%d str:%s\n' 42 'awesome'" "num:42 str:awesome"
 run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 
+# CLI operands must retain their boundaries when passed to the shell.
+if GOSH="$GOSH" python3 "$REPO_ROOT/test/test_cli_args.py"; then
+    PASSED=$((PASSED + 1))
+else
+    FAILED=$((FAILED + 1))
+fi
+
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 
