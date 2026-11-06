@@ -1,13 +1,8 @@
-# GOSH
+<p align="center">
+  <img src="assets/gosh-logo.png" alt="GOSH Goose Terminal Logo" width="500">
+</p>
 
-```text
-  ██████╗  ██████╗ ███████╗██╗  ██╗
- ██╔════╝ ██╔═══██╗██╔════╝██║  ██║
- ██║  ███╗██║   ██║███████╗███████║
- ██║   ██║██║   ██║╚════██║██╔══██║
- ╚██████╔╝╚██████╔╝███████║██║  ██║
-  ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
-```
+<h1 align="center">GOSH</h1>
 
 **A Fast, Native Unix Shell Written Primarily in Goose**
 
@@ -72,7 +67,7 @@ Clone the repository and build the binary:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/AD1TYA-commits/gosh.git
+git clone https://github.com/voidssx1/gosh.git
 cd gosh
 
 # 2. Build GOSH executable using Goose
