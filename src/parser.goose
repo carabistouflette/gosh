@@ -8,7 +8,157 @@ fn is_redir_token(kind: i32) -> bool {
     kind == TOKEN_REDIR_E2O
 }
 
-fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
+// Bodies remain shell text for the executor. Walk the grammar before copying
+// tokens so an inner fi/done cannot terminate an enclosing construct.
+fn is_control_end(kind: i32) -> bool {
+    kind == TOKEN_THEN || kind == TOKEN_ELIF || kind == TOKEN_ELSE ||
+    kind == TOKEN_FI || kind == TOKEN_DO || kind == TOKEN_DONE
+}
+
+fn copy_control_text(tokens: const Token[..64]&, start: i32, end: i32, out: u8[>..]&) {
+    for i in start..end {
+        if tokens[i].kind == TOKEN_NEWLINE || tokens[i].kind == TOKEN_SEMI {
+            format(out, "; ");
+        } else {
+            if out.len > 0 && out[out.len - 1] != ' ' { out.push(' '); }
+            format(out, tokens[i].text);
+        }
+    }
+}
+
+// Stops are recognized only where a command can begin. Keyword-shaped arguments
+// such as `echo done` must not close a loop.
+recursive fn collect_control_text(tokens: const Token[..64]&, pos: i32&, stop1: i32, stop2: i32, stop3: i32, out: u8[>..]&, error: u8[>..]&) -> bool {
+    let start = pos;
+    var command_start = true;
+    var has_command = false;
+    while pos < tokens.len && tokens[pos].kind != TOKEN_EOF {
+        let kind = tokens[pos].kind;
+        if (command_start || kind == TOKEN_RPAREN || kind == TOKEN_RBRACE) &&
+           (kind == stop1 || kind == stop2 || kind == stop3) { break; }
+        if kind == TOKEN_SEMI || kind == TOKEN_NEWLINE || kind == TOKEN_AND || kind == TOKEN_OR || kind == TOKEN_PIPE || kind == TOKEN_AMP {
+            command_start = true;
+            pos++;
+            continue;
+        }
+        if command_start && (kind == TOKEN_IF || kind == TOKEN_WHILE || kind == TOKEN_FOR) {
+            var nested = Statement {};
+            if !parse_control(tokens, pos, nested, error) { return false; }
+        } else if kind == TOKEN_LPAREN || kind == TOKEN_LBRACE {
+            // Empty parentheses may be part of a function declaration.
+            if kind == TOKEN_LPAREN && pos + 1 < tokens.len && tokens[pos + 1].kind == TOKEN_RPAREN {
+                pos += 2;
+                continue;
+            }
+            var closing = TOKEN_RBRACE;
+            if kind == TOKEN_LPAREN { closing = TOKEN_RPAREN; }
+            pos++;
+            var grouped: u8[>..] = [];
+            if !collect_control_text(tokens, pos, closing, -1, -1, grouped, error) { return false; }
+            if pos >= tokens.len || tokens[pos].kind != closing {
+                format(error, "unclosed group in control structure");
+                return false;
+            }
+            pos++;
+        } else {
+            if command_start && is_control_end(kind) {
+                format(error, "unexpected '", tokens[pos].text, "'");
+                return false;
+            }
+            pos++;
+        }
+        has_command = true;
+        command_start = false;
+    }
+    if !has_command {
+        format(error, "expected a command in control structure");
+        return false;
+    }
+    copy_control_text(tokens, start, pos, out);
+    return true;
+}
+
+fn expect_control_token(tokens: const Token[..64]&, pos: i32&, kind: i32, name: const u8[:], error: u8[>..]&) -> bool {
+    if pos >= tokens.len || tokens[pos].kind != kind {
+        format(error, "expected '", name, "'");
+        return false;
+    }
+    pos++;
+    return true;
+}
+
+recursive fn parse_control(tokens: const Token[..64]&, pos: i32&, stmt: Statement&, error: u8[>..]&) -> bool {
+    let kind = tokens[pos].kind;
+    pos++;
+    var cond: u8[>..] = [];
+    var body: u8[>..] = [];
+    var alternative: u8[>..] = [];
+    if kind == TOKEN_IF || kind == TOKEN_ELIF {
+        stmt.kind = STMT_IF;
+        if !collect_control_text(tokens, pos, TOKEN_THEN, -1, -1, cond, error) { return false; }
+        if !expect_control_token(tokens, pos, TOKEN_THEN, "then", error) { return false; }
+        if !collect_control_text(tokens, pos, TOKEN_ELIF, TOKEN_ELSE, TOKEN_FI, body, error) { return false; }
+        if pos < tokens.len && tokens[pos].kind == TOKEN_ELIF {
+            // Lower the remaining chain to an if in the false branch. The
+            // recursive tail consumes the one fi shared by the entire chain.
+            let tail_start = pos;
+            var tail = Statement {};
+            if !parse_control(tokens, pos, tail, error) { return false; }
+            format(alternative, "if ");
+            copy_control_text(tokens, tail_start + 1, pos, alternative);
+        } else {
+            if pos < tokens.len && tokens[pos].kind == TOKEN_ELSE {
+                pos++;
+                if !collect_control_text(tokens, pos, TOKEN_FI, -1, -1, alternative, error) { return false; }
+            }
+            if !expect_control_token(tokens, pos, TOKEN_FI, "fi", error) { return false; }
+        }
+    } else {
+        if kind == TOKEN_WHILE {
+            stmt.kind = STMT_WHILE;
+            if !collect_control_text(tokens, pos, TOKEN_DO, -1, -1, cond, error) { return false; }
+        } else {
+            stmt.kind = STMT_FOR;
+            if pos >= tokens.len || tokens[pos].kind != TOKEN_WORD {
+                format(error, "expected for variable");
+                return false;
+            }
+            format(stmt.for_var, tokens[pos].text);
+            pos++;
+            if pos < tokens.len && tokens[pos].kind == TOKEN_IN {
+                pos++;
+                while pos < tokens.len && tokens[pos].kind != TOKEN_SEMI && tokens[pos].kind != TOKEN_NEWLINE && tokens[pos].kind != TOKEN_EOF {
+                    if tokens[pos].kind != TOKEN_WORD && !(tokens[pos].kind >= TOKEN_IF && tokens[pos].kind <= TOKEN_FUNCTION) {
+                        format(error, "expected for word or separator");
+                        return false;
+                    }
+                    if stmt.for_words.len >= 16 {
+                        format(error, "too many for words");
+                        return false;
+                    }
+                    var word: u8[..128] = [];
+                    format(word, tokens[pos].text);
+                    stmt.for_words.push(word);
+                    pos++;
+                }
+            }
+            while pos < tokens.len && (tokens[pos].kind == TOKEN_SEMI || tokens[pos].kind == TOKEN_NEWLINE) { pos++; }
+        }
+        if !expect_control_token(tokens, pos, TOKEN_DO, "do", error) { return false; }
+        if !collect_control_text(tokens, pos, TOKEN_DONE, -1, -1, body, error) { return false; }
+        if !expect_control_token(tokens, pos, TOKEN_DONE, "done", error) { return false; }
+    }
+    if cond.len > 256 || body.len > 512 || alternative.len > 256 {
+        format(error, "control structure exceeds text capacity");
+        return false;
+    }
+    format(stmt.cond_text, cond);
+    format(stmt.body_text, body);
+    format(stmt.else_text, alternative);
+    return true;
+}
+
+fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&, error: u8[>..]&) -> bool {
     stmts.clear();
     var pos = 0;
     let n = tokens.len;
@@ -22,51 +172,9 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             continue;
         }
 
-        // 1. IF statement: if COND; then THEN; [else ELSE;] fi
-        if tok.kind == TOKEN_IF {
-            pos++;
-            var stmt = Statement { kind: STMT_IF };
-
-            // Collect condition tokens until 'then'
-            while pos < n && tokens[pos].kind != TOKEN_THEN && tokens[pos].kind != TOKEN_EOF {
-                if stmt.cond_text.len > 0 { stmt.cond_text.push(' '); }
-                format(stmt.cond_text, tokens[pos].text);
-                pos++;
-            }
-            if pos < n && tokens[pos].kind == TOKEN_THEN { pos++; }
-
-            // Collect then body until 'else', 'elif', or 'fi'
-            while pos < n && tokens[pos].kind != TOKEN_ELSE && tokens[pos].kind != TOKEN_ELIF && tokens[pos].kind != TOKEN_FI && tokens[pos].kind != TOKEN_EOF {
-                if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
-                    stmt.body_text.push(';');
-                    stmt.body_text.push(' ');
-                } else {
-                    if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
-                        stmt.body_text.push(' ');
-                    }
-                    format(stmt.body_text, tokens[pos].text);
-                }
-                pos++;
-            }
-
-            // Optional ELSE
-            if pos < n && tokens[pos].kind == TOKEN_ELSE {
-                pos++;
-                while pos < n && tokens[pos].kind != TOKEN_FI && tokens[pos].kind != TOKEN_EOF {
-                    if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
-                        stmt.else_text.push(';');
-                        stmt.else_text.push(' ');
-                    } else {
-                        if stmt.else_text.len > 0 && stmt.else_text[stmt.else_text.len - 1] != ' ' {
-                            stmt.else_text.push(' ');
-                        }
-                        format(stmt.else_text, tokens[pos].text);
-                    }
-                    pos++;
-                }
-            }
-
-            if pos < n && tokens[pos].kind == TOKEN_FI { pos++; }
+        if tok.kind == TOKEN_IF || tok.kind == TOKEN_WHILE || tok.kind == TOKEN_FOR {
+            var stmt = Statement {};
+            if !parse_control(tokens, pos, stmt, error) { return false; }
             while pos < n && is_redir_token(tokens[pos].kind) {
                 var r = Redirection { kind: tokens[pos].kind };
                 pos++;
@@ -76,86 +184,9 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             stmts.push(stmt);
             continue;
         }
-
-        // 2. WHILE statement: while COND; do BODY; done
-        if tok.kind == TOKEN_WHILE {
-            pos++;
-            var stmt = Statement { kind: STMT_WHILE };
-
-            while pos < n && tokens[pos].kind != TOKEN_DO && tokens[pos].kind != TOKEN_EOF {
-                if stmt.cond_text.len > 0 { stmt.cond_text.push(' '); }
-                format(stmt.cond_text, tokens[pos].text);
-                pos++;
-            }
-            if pos < n && tokens[pos].kind == TOKEN_DO { pos++; }
-
-            while pos < n && tokens[pos].kind != TOKEN_DONE && tokens[pos].kind != TOKEN_EOF {
-                if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
-                    stmt.body_text.push(';');
-                    stmt.body_text.push(' ');
-                } else {
-                    if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
-                        stmt.body_text.push(' ');
-                    }
-                    format(stmt.body_text, tokens[pos].text);
-                }
-                pos++;
-            }
-
-            if pos < n && tokens[pos].kind == TOKEN_DONE { pos++; }
-            while pos < n && is_redir_token(tokens[pos].kind) {
-                var r = Redirection { kind: tokens[pos].kind };
-                pos++;
-                if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
-            }
-            stmts.push(stmt);
-            continue;
-        }
-
-        // 3. FOR statement: for VAR in WORDS; do BODY; done
-        if tok.kind == TOKEN_FOR {
-            pos++;
-            var stmt = Statement { kind: STMT_FOR };
-            if pos < n && tokens[pos].kind == TOKEN_WORD {
-                format(stmt.for_var, tokens[pos].text);
-                pos++;
-            }
-            if pos < n && tokens[pos].kind == TOKEN_IN {
-                pos++;
-                while pos < n && tokens[pos].kind != TOKEN_DO && tokens[pos].kind != TOKEN_SEMI && tokens[pos].kind != TOKEN_NEWLINE && tokens[pos].kind != TOKEN_EOF {
-                    if tokens[pos].kind == TOKEN_WORD && stmt.for_words.len < 16 {
-                        var w: u8[..128] = [];
-                        format(w, tokens[pos].text);
-                        stmt.for_words.push(w);
-                    }
-                    pos++;
-                }
-            }
-            while pos < n && (tokens[pos].kind == TOKEN_SEMI || tokens[pos].kind == TOKEN_NEWLINE) { pos++; }
-            if pos < n && tokens[pos].kind == TOKEN_DO { pos++; }
-
-            while pos < n && tokens[pos].kind != TOKEN_DONE && tokens[pos].kind != TOKEN_EOF {
-                if tokens[pos].kind == TOKEN_NEWLINE || tokens[pos].kind == TOKEN_SEMI {
-                    stmt.body_text.push(';');
-                    stmt.body_text.push(' ');
-                } else {
-                    if stmt.body_text.len > 0 && stmt.body_text[stmt.body_text.len - 1] != ' ' {
-                        stmt.body_text.push(' ');
-                    }
-                    format(stmt.body_text, tokens[pos].text);
-                }
-                pos++;
-            }
-            if pos < n && tokens[pos].kind == TOKEN_DONE { pos++; }
-            while pos < n && is_redir_token(tokens[pos].kind) {
-                var r = Redirection { kind: tokens[pos].kind };
-                pos++;
-                if pos < n && tokens[pos].kind == TOKEN_WORD { format(r.target, tokens[pos].text); pos++; }
-                if stmt.redirs.len < 4 { stmt.redirs.push(r); }
-            }
-            stmts.push(stmt);
-            continue;
+        if is_control_end(tok.kind) {
+            format(error, "unexpected '", tok.text, "'");
+            return false;
         }
 
         // 4. FUNCTION definition: name() { ... } or function name { ... }
@@ -283,7 +314,7 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             }
 
             // Word / Argument
-            if t.kind == TOKEN_WORD {
+            if t.kind == TOKEN_WORD || (t.kind >= TOKEN_IF && t.kind <= TOKEN_FUNCTION) {
                 // Check if assignment (e.g. FOO=bar) on first word with no command yet
                 if current_cmd.argv.len == 0 && !current_cmd.is_assignment {
                     let eq = find(t.text, "=");
@@ -320,4 +351,5 @@ fn parse_statements(tokens: const Token[..64]&, stmts: Statement[..8]&) {
             stmts.push(stmt);
         }
     }
+    return true;
 }
