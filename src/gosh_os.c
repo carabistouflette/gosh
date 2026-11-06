@@ -547,59 +547,25 @@ int32_t gosh_capture_cmd_packed(
     return total;
 }
 
-int32_t gosh_redirect_begin(
-    gosh_slice_u8 in_file,
-    gosh_slice_u8 out_file,
-    int32_t append_out,
-    gosh_slice_u8 err_file,
-    int32_t append_err,
-    int32_t redirect_err_to_out,
-    int32_t *saved_fds
-) {
-    /* saved_fds array of 3 ints: [saved_stdin, saved_stdout, saved_stderr] */
-    saved_fds[0] = -1;
-    saved_fds[1] = -1;
-    saved_fds[2] = -1;
-
-    char in_buf[4096] = {0};
-    char out_buf[4096] = {0};
-    char err_buf[4096] = {0};
-    slice_to_cstr(in_file, in_buf, sizeof(in_buf));
-    slice_to_cstr(out_file, out_buf, sizeof(out_buf));
-    slice_to_cstr(err_file, err_buf, sizeof(err_buf));
-
-    if (in_buf[0]) {
-        int fd = open(in_buf, O_RDONLY);
-        if (fd >= 0) {
-            saved_fds[0] = dup(STDIN_FILENO);
-            dup2(fd, STDIN_FILENO);
-            close(fd);
+int32_t gosh_redirect_begin(int32_t *saved_fds) {
+    /* Save all standard descriptors before Goose applies ordered redirections.
+       -1 records a descriptor that was originally closed. Backups must be above
+       stderr so closed standard descriptors cannot be occupied by a backup. */
+    fflush(stdout);
+    fflush(stderr);
+    for (int i = 0; i < 3; i++) saved_fds[i] = -1;
+    for (int i = 0; i < 3; i++) {
+        int fd = fcntl(i, F_DUPFD_CLOEXEC, 3);
+        if (fd < 0 && errno != EBADF) {
+            perror("gosh: save redirections");
+            for (int j = 0; j < i; j++) {
+                if (saved_fds[j] >= 0) close(saved_fds[j]);
+                saved_fds[j] = -1;
+            }
+            return -1;
         }
+        saved_fds[i] = fd;
     }
-
-    if (out_buf[0]) {
-        int flags = O_WRONLY | O_CREAT | (append_out ? O_APPEND : O_TRUNC);
-        int fd = open(out_buf, flags, 0666);
-        if (fd >= 0) {
-            saved_fds[1] = dup(STDOUT_FILENO);
-            dup2(fd, STDOUT_FILENO);
-            close(fd);
-        }
-    }
-
-    if (redirect_err_to_out) {
-        saved_fds[2] = dup(STDERR_FILENO);
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-    } else if (err_buf[0]) {
-        int flags = O_WRONLY | O_CREAT | (append_err ? O_APPEND : O_TRUNC);
-        int fd = open(err_buf, flags, 0666);
-        if (fd >= 0) {
-            saved_fds[2] = dup(STDERR_FILENO);
-            dup2(fd, STDERR_FILENO);
-            close(fd);
-        }
-    }
-
     return 0;
 }
 
@@ -607,18 +573,16 @@ void gosh_redirect_end(const int32_t *saved_fds) {
     if (!saved_fds) return;
     fflush(stdout);
     fflush(stderr);
-
-    if (saved_fds[0] >= 0) {
-        dup2(saved_fds[0], STDIN_FILENO);
-        close(saved_fds[0]);
-    }
-    if (saved_fds[1] >= 0) {
-        dup2(saved_fds[1], STDOUT_FILENO);
-        close(saved_fds[1]);
-    }
-    if (saved_fds[2] >= 0) {
-        dup2(saved_fds[2], STDERR_FILENO);
-        close(saved_fds[2]);
+    for (int i = 0; i < 3; i++) {
+        if (saved_fds[i] >= 0) {
+            int result;
+            do {
+                result = dup2(saved_fds[i], i);
+            } while (result < 0 && errno == EINTR);
+            close(saved_fds[i]);
+        } else {
+            close(i);
+        }
     }
 }
 
@@ -733,14 +697,21 @@ void gosh_exit(int32_t code) {
 int32_t gosh_open_file(gosh_slice_u8 path, int32_t mode) {
     char pbuf[4096];
     slice_to_cstr(path, pbuf, sizeof(pbuf));
+    int fd;
     if (mode == 0) {
-        return open(pbuf, O_RDONLY);
+        fd = open(pbuf, O_RDONLY);
     } else if (mode == 1) {
-        return open(pbuf, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        fd = open(pbuf, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     } else if (mode == 2) {
-        return open(pbuf, O_WRONLY | O_CREAT | O_APPEND, 0666);
+        fd = open(pbuf, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    } else {
+        errno = EINVAL;
+        fd = -1;
     }
-    return -1;
+    if (fd < 0) {
+        fprintf(stderr, "gosh: cannot open %s: %s\n", pbuf, strerror(errno));
+    }
+    return fd;
 }
 
 int32_t gosh_execvp_packed(gosh_slice_u8 packed_args, int32_t argc) {

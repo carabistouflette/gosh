@@ -61,64 +61,36 @@ recursive fn dispatch_builtin(state: ShellState&, cmd: const u8[:], args: const 
     return 1;
 }
 
-// Apply redirections in a forked child process
+// Apply redirections in source order; callers in the parent must save/restore fds.
 fn apply_redirections(state: ShellState&, redirs: const Redirection[..4]&) -> bool {
     for r in redirs {
         var exp_target: u8[..128] = [];
         expand_word(state, r.target, exp_target);
 
-        if r.kind == TOKEN_REDIR_IN {
-            let fd = gosh_open_file(exp_target, 0);
-            if fd < 0 {
-                print("gosh: ", exp_target, ": No such file or directory");
-                return false;
-            }
-            gosh_dup2(fd, 0);
-            gosh_close(fd);
-        } else if r.kind == TOKEN_REDIR_OUT {
-            let fd = gosh_open_file(exp_target, 1);
-            if fd < 0 {
-                print("gosh: cannot create ", exp_target);
-                return false;
-            }
-            gosh_dup2(fd, 1);
-            gosh_close(fd);
-        } else if r.kind == TOKEN_REDIR_APP {
-            let fd = gosh_open_file(exp_target, 2);
-            if fd < 0 {
-                print("gosh: cannot create ", exp_target);
-                return false;
-            }
-            gosh_dup2(fd, 1);
-            gosh_close(fd);
-        } else if r.kind == TOKEN_REDIR_ERR {
-            let fd = gosh_open_file(exp_target, 1);
-            if fd < 0 {
-                print("gosh: cannot create ", exp_target);
-                return false;
-            }
-            gosh_dup2(fd, 2);
-            gosh_close(fd);
-        } else if r.kind == TOKEN_REDIR_ERR_APP {
-            let fd = gosh_open_file(exp_target, 2);
-            if fd < 0 {
-                print("gosh: cannot create ", exp_target);
-                return false;
-            }
-            gosh_dup2(fd, 2);
-            gosh_close(fd);
-        } else if r.kind == TOKEN_REDIR_E2O {
-            gosh_dup2(1, 2);
-        } else if r.kind == TOKEN_REDIR_BOTH {
-            let fd = gosh_open_file(exp_target, 1);
-            if fd < 0 {
-                print("gosh: cannot create ", exp_target);
-                return false;
-            }
-            gosh_dup2(fd, 1);
-            gosh_dup2(fd, 2);
+        if r.kind == TOKEN_REDIR_E2O {
+            if gosh_dup2(1, 2) < 0 { return false; }
+            continue;
+        }
+
+        var mode: i32 = 1;
+        var target_fd: i32 = 1;
+        if r.kind == TOKEN_REDIR_IN { mode = 0; target_fd = 0; }
+        else if r.kind == TOKEN_REDIR_APP { mode = 2; }
+        else if r.kind == TOKEN_REDIR_ERR { target_fd = 2; }
+        else if r.kind == TOKEN_REDIR_ERR_APP { mode = 2; target_fd = 2; }
+
+        let fd = gosh_open_file(exp_target, mode);
+        if fd < 0 { return false; }
+        let result = gosh_dup2(fd, target_fd);
+        var both_result: i32 = 0;
+        if result >= 0 && r.kind == TOKEN_REDIR_BOTH {
+            both_result = gosh_dup2(fd, 2);
+        }
+        // open may itself return a standard descriptor if it was closed.
+        if fd != target_fd && !(r.kind == TOKEN_REDIR_BOTH && fd == 2) {
             gosh_close(fd);
         }
+        if result < 0 || both_result < 0 { return false; }
     }
     return true;
 }
@@ -187,6 +159,17 @@ recursive fn execute_cmd_in_child(state: ShellState&, raw_cmd: const Command&) {
     gosh_exit(err);
 }
 
+// Begin a parent-process redirection scope. On failure no scope remains active.
+fn begin_command_redirections(state: ShellState&, redirs: const Redirection[..4]&, saved_fds: i32[3]&) -> bool {
+    if redirs.len == 0 { return true; }
+    if gosh_redirect_begin(saved_fds[0]) != 0 { return false; }
+    if !apply_redirections(state, redirs) {
+        gosh_redirect_end(saved_fds[0]);
+        return false;
+    }
+    return true;
+}
+
 // Execute a single command
 recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> i32 {
     // 1. Variable assignment with no command (e.g. FOO=bar)
@@ -210,6 +193,8 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
     // 3. Check for shell function
     for f in state.funcs {
         if f.name == cmd_name {
+            var saved_fds: i32[3] = [-1, -1, -1];
+            if !begin_command_redirections(state, raw_cmd.redirs, saved_fds) { return 1; }
             let saved_args = state.script_args;
             state.script_args.clear();
             for k in 1..exp_args.len {
@@ -217,6 +202,7 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
             }
             let res = execute_script(state, f.body);
             state.script_args = saved_args;
+            if raw_cmd.redirs.len > 0 { gosh_redirect_end(saved_fds[0]); }
             return res;
         }
     }
@@ -236,33 +222,11 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
 
     // 5. Check for builtin (executed in parent shell process)
     if is_builtin(cmd_name) {
-        if raw_cmd.redirs.len > 0 {
-            var in_file: u8[..128] = [];
-            var out_file: u8[..128] = [];
-            var append_out: i32 = 0;
-            var err_file: u8[..128] = [];
-            var append_err: i32 = 0;
-            var redirect_err_to_out: i32 = 0;
-
-            for r in raw_cmd.redirs {
-                var exp_target: u8[..128] = [];
-                expand_word(state, r.target, exp_target);
-                if r.kind == TOKEN_REDIR_IN { format(in_file, exp_target); }
-                else if r.kind == TOKEN_REDIR_OUT { out_file.clear(); format(out_file, exp_target); append_out = 0; }
-                else if r.kind == TOKEN_REDIR_APP { out_file.clear(); format(out_file, exp_target); append_out = 1; }
-                else if r.kind == TOKEN_REDIR_ERR { err_file.clear(); format(err_file, exp_target); append_err = 0; }
-                else if r.kind == TOKEN_REDIR_ERR_APP { err_file.clear(); format(err_file, exp_target); append_err = 1; }
-                else if r.kind == TOKEN_REDIR_E2O { redirect_err_to_out = 1; }
-                else if r.kind == TOKEN_REDIR_BOTH { out_file.clear(); format(out_file, exp_target); redirect_err_to_out = 1; }
-            }
-
-            var saved_fds: i32[3] = [-1, -1, -1];
-            gosh_redirect_begin(in_file, out_file, append_out, err_file, append_err, redirect_err_to_out, saved_fds[0]);
-            let status = dispatch_builtin(state, cmd_name, exp_args);
-            gosh_redirect_end(saved_fds[0]);
-            return status;
-        }
-        return dispatch_builtin(state, cmd_name, exp_args);
+        var saved_fds: i32[3] = [-1, -1, -1];
+        if !begin_command_redirections(state, raw_cmd.redirs, saved_fds) { return 1; }
+        let status = dispatch_builtin(state, cmd_name, exp_args);
+        if raw_cmd.redirs.len > 0 { gosh_redirect_end(saved_fds[0]); }
+        return status;
     }
 
     // 6. External command execution

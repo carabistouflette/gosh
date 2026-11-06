@@ -110,6 +110,41 @@ run_test "shell function" "greet() { echo \"Hello, \$1!\"; }; greet Gosh" "Hello
 run_test "alias expansion" "alias hi='echo welcome' && hi" "welcome"
 run_test "unalias builtin" "alias foo='echo 1' && unalias foo && alias | grep foo || echo unset_ok" "unset_ok"
 
+# Function and builtin redirections in the current shell.
+REDIR_DIR=$(mktemp -d /tmp/gosh_redirs.XXXXXX)
+run_test "function stdout and restoration" "f() { echo body; }; f > $REDIR_DIR/out; echo after; cat $REDIR_DIR/out" "after
+body"
+run_test "function stdin and stdout" "echo input > $REDIR_DIR/in; f() { cat; }; f < $REDIR_DIR/in > $REDIR_DIR/out; echo after; cat $REDIR_DIR/out" "after
+input"
+run_test "redirected function preserves variables" "x=before; f() { x=after; }; f > $REDIR_DIR/out; echo \$x" "after"
+run_test "nested functions restore args and stdout" "inner() { echo \$1; }; outer() { inner child > $REDIR_DIR/inner; echo \$1; }; outer parent > $REDIR_DIR/out; echo [\$1]; cat $REDIR_DIR/out; cat $REDIR_DIR/inner" "[]
+parent
+child"
+run_test "function failure status and restoration" "f() { test a = b; }; f > $REDIR_DIR/out; echo \$?; echo after" "1
+after"
+run_test "function failed input skips body and args" "x=before; f() { x=bad; echo bad; }; f child 2>/dev/null < $REDIR_DIR/missing; echo \$?; echo \$x [\$1]" "1
+before []"
+run_test "function partial setup failure restores stdout" "f() { echo bad; }; f 2>/dev/null > $REDIR_DIR/out < $REDIR_DIR/missing; echo \$?; echo after; cat $REDIR_DIR/out" "1
+after"
+run_test "builtin failed output skips state change" "x=before; unset x 2>/dev/null > $REDIR_DIR/missing/out; echo \$?; echo \$x" "1
+before"
+run_test "builtin partial setup failure restores stdout" "echo bad 2>/dev/null > $REDIR_DIR/out < $REDIR_DIR/missing; echo \$?; echo after; cat $REDIR_DIR/out" "1
+after"
+run_test "builtin repeated output creates both files" "echo stale > $REDIR_DIR/first; echo body > $REDIR_DIR/first > $REDIR_DIR/out; cat $REDIR_DIR/first; cat $REDIR_DIR/out" "body"
+run_test "function descriptor order dup before file" "f() { sh -c 'echo err >&2'; }; f 2>&1 > $REDIR_DIR/out; echo after; cat $REDIR_DIR/out" "err
+after"
+run_test "function descriptor order file before dup" "f() { sh -c 'echo err >&2'; }; f > $REDIR_DIR/out 2>&1; echo after; cat $REDIR_DIR/out" "after
+err"
+run_test "builtin descriptor order dup before file" "command sh -c 'echo err >&2' 2>&1 > $REDIR_DIR/out; echo after; cat $REDIR_DIR/out" "err
+after"
+run_test "builtin descriptor order file before dup" "command sh -c 'echo err >&2' > $REDIR_DIR/out 2>&1; echo after; cat $REDIR_DIR/out" "after
+err"
+run_test "builtin both then stderr override" "command sh -c 'echo out; echo err >&2' &> $REDIR_DIR/out 2> $REDIR_DIR/err; cat $REDIR_DIR/out; cat $REDIR_DIR/err" "out
+err"
+run_test "stderr restored after builtin setup failure" "echo bad 2> $REDIR_DIR/err < $REDIR_DIR/missing; echo \$?; sh -c 'echo restored >&2'" "1
+restored"
+rm -rf "$REDIR_DIR"
+
 # 11. Builtins (export, unset, printf, test)
 run_test "export and read env" "export GOSH_TEST_ENV=42 && echo \$GOSH_TEST_ENV" "42"
 run_test "unset variable" "VAR=10 && unset VAR && echo \"[\$VAR]\"" "[]"
