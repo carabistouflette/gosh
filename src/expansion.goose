@@ -102,28 +102,37 @@ fn get_var(state: const ShellState&, name: const u8[:], out: u8[..1024]&) -> boo
 }
 
 // Set or update a variable in state
-fn set_var(state: ShellState&, name: const u8[:], val: const u8[:], export_to_env: bool) {
-    // Check if already in state
+fn set_var(state: ShellState&, name: const u8[:], val: const u8[:], export_to_env: bool) -> i32 {
+    // Preserve export status when assigning an existing shell variable.
     for i in state.var_count {
         if state.vars[i].name == name {
+            let exported = state.vars[i].exported || export_to_env;
+            if exported && gosh_setenv(name, val) != 0 {
+                print("gosh: failed to update environment variable: ", name);
+                return 1;
+            }
             state.vars[i].val.clear();
             format(state.vars[i].val, val);
-            if export_to_env {
-                state.vars[i].exported = true;
-                // Update environment
-            }
-            return;
+            state.vars[i].exported = exported;
+            return 0;
         }
     }
 
-    // Add new variable
+    // Inherited environment variables may not yet have a shell-state entry.
+    var env_buf: u8[>..] = [];
+    let exported = export_to_env || env(name, env_buf);
     if state.var_count < 256 {
-        var v = ShellVar { exported: export_to_env };
+        if exported && gosh_setenv(name, val) != 0 {
+            print("gosh: failed to update environment variable: ", name);
+            return 1;
+        }
+        var v = ShellVar { exported: exported };
         format(v.name, name);
         format(v.val, val);
         state.vars.push(v);
         state.var_count = state.vars.len as i32;
     }
+    return 0;
 }
 
 // Simple arithmetic evaluator: handles +, -, *, /, %, (, ) and numbers/vars

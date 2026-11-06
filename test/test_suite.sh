@@ -161,6 +161,25 @@ run_test "unset variable" "VAR=10 && unset VAR && echo \"[\$VAR]\"" "[]"
 run_test "printf builtin" "printf 'num:%d str:%s\n' 42 'awesome'" "num:42 str:awesome"
 run_test "test builtin operators" "if [ 10 -gt 5 ]; then echo gt; fi" "gt"
 
+# Persistent assignments must reach real children, while private variables stay private.
+export GOSH_INHERITED_ASSIGN=old
+export GOSH_INHERITED_EMPTY=
+unset GOSH_PRIVATE_ASSIGN
+run_test "exported reassignment reaches child" 'export GOSH_ASSIGN=old; GOSH_ASSIGN=new; sh -c '"'"'echo "$GOSH_ASSIGN"'"'"'' "new"
+run_test "export by name retains export on assignment" 'GOSH_ASSIGN=old; export GOSH_ASSIGN; GOSH_ASSIGN=new; sh -c '"'"'echo "$GOSH_ASSIGN"'"'"'' "new"
+run_test "inherited reassignment reaches child repeatedly" 'GOSH_INHERITED_ASSIGN=new; GOSH_INHERITED_ASSIGN=latest; sh -c '"'"'echo "$GOSH_INHERITED_ASSIGN"'"'"'' "latest"
+run_test "empty inherited variable stays exported" 'GOSH_INHERITED_EMPTY=new; sh -c '"'"'echo "$GOSH_INHERITED_EMPTY"'"'"'' "new"
+run_test "exported empty assignment reaches child" 'export GOSH_ASSIGN=old; GOSH_ASSIGN=; sh -c '"'"'echo "[$GOSH_ASSIGN]"'"'"'' "[]"
+run_test "private reassignment stays private" 'GOSH_PRIVATE_ASSIGN=old; GOSH_PRIVATE_ASSIGN=new; sh -c '"'"'echo "[${GOSH_PRIVATE_ASSIGN-unset}]"'"'"'' "[unset]"
+run_test "exported loop variable reaches child" 'export GOSH_ASSIGN=old; for GOSH_ASSIGN in new; do sh -c '"'"'echo "$GOSH_ASSIGN"'"'"'; done' "new"
+# Only the new PATH contains this executable, so success proves exec lookup changed.
+mkdir "$TEST_TMP_DIR/path"
+printf '#!/bin/sh\necho path-updated\n' > "$TEST_TMP_DIR/path/gosh-path-probe"
+chmod +x "$TEST_TMP_DIR/path/gosh-path-probe"
+export GOSH_ASSIGN_PATH="$TEST_TMP_DIR/path"
+run_test "PATH assignment updates exec lookup" 'PATH="$GOSH_ASSIGN_PATH"; gosh-path-probe' "path-updated"
+
+
 # 12. Background Jobs
 run_test "background job" "sleep 0.1 & jobs | grep -o 'sleep'" "sleep"
 

@@ -138,8 +138,7 @@ recursive fn execute_cmd_in_child(state: ShellState&, raw_cmd: const Command&) {
     if raw_cmd.is_assignment && raw_cmd.arg_count == 0 {
         var exp_val: u8[..128] = [];
         expand_word(state, raw_cmd.assign_val, exp_val);
-        set_var(state, raw_cmd.assign_var, exp_val, false);
-        gosh_exit(0);
+        gosh_exit(set_var(state, raw_cmd.assign_var, exp_val, false));
     }
 
     var exp_args: u8[..128][..16] = [];
@@ -199,8 +198,7 @@ recursive fn execute_single_cmd(state: ShellState&, raw_cmd: const Command&) -> 
     if raw_cmd.is_assignment && raw_cmd.arg_count == 0 {
         var exp_val: u8[..128] = [];
         expand_word(state, raw_cmd.assign_val, exp_val);
-        set_var(state, raw_cmd.assign_var, exp_val, false);
-        return 0;
+        return set_var(state, raw_cmd.assign_var, exp_val, false);
     }
 
     // 2. Expand arguments
@@ -485,7 +483,8 @@ recursive fn execute_compound_statement(state: ShellState&, stmt: const Statemen
             if !state.running { break; }
             var exp_w: u8[..128] = [];
             expand_word(state, w, exp_w);
-            set_var(state, stmt.for_var, exp_w, false);
+            let assign_status = set_var(state, stmt.for_var, exp_w, false);
+            if assign_status != 0 { return assign_status; }
             last = execute_script(state, stmt.body_text);
         }
         return last;
