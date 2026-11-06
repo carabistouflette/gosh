@@ -180,7 +180,13 @@ fn tokenize_line(line: const u8[:], tokens: Token[..64]&) -> i32 {
                 tok.text.push('(');
                 tok.text.push('(');
                 i += 3;
-                while i + 1 < len && !(line[i] == ')' && line[i + 1] == ')') {
+                var depth = 0;
+                while i < len {
+                    if line[i] == '(' { depth++; }
+                    else if line[i] == ')' {
+                        if depth == 0 { break; }
+                        depth--;
+                    }
                     tok.text.push(line[i]);
                     i++;
                 }

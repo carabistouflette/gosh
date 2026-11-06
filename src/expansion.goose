@@ -131,58 +131,61 @@ recursive fn eval_arith(state: const ShellState&, expr: const u8[:]) -> i64 {
     var s = trim(expr);
     if s.len == 0 { return 0; }
 
-    // Strip outer parens if wrapped
-    if s.len >= 2 && s[0] == '(' && s[s.len - 1] == ')' {
-        return eval_arith(state, s[1..s.len - 1]);
-    }
-
-    // Look for lowest precedence operators outside parens: + and -
+    // Select the rightmost lowest-precedence binary operator outside groups.
+    // Tracking whether an operand is expected distinguishes unary signs even
+    // when whitespace separates them from the preceding operator.
     var depth = 0;
     var split_idx = -1;
     var op = 0;
-
+    var precedence = 3;
+    var expect_operand = true;
+    var outer_end = -1;
     for i in s.len {
         let c = s[i];
-        if c == '(' { depth++; }
-        else if c == ')' { depth--; }
-        else if depth == 0 {
-            if (c == '+' || c == '-') && i > 0 && s[i - 1] != '+' && s[i - 1] != '-' && s[i - 1] != '*' && s[i - 1] != '/' {
-                split_idx = i;
-                op = c;
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' { continue; }
+        if c == '(' {
+            depth++;
+        } else if c == ')' {
+            depth--;
+            if depth < 0 { return 0; }
+            if depth == 0 {
+                if outer_end < 0 { outer_end = i; }
+                expect_operand = false;
+            }
+        } else if depth == 0 {
+            if c == '+' || c == '-' || c == '*' || c == '/' || c == '%' {
+                if !expect_operand {
+                    let current = if c == '+' || c == '-' { 1 } else { 2 };
+                    if current <= precedence {
+                        split_idx = i;
+                        op = c;
+                        precedence = current;
+                    }
+                }
+                expect_operand = true;
+            } else {
+                expect_operand = false;
             }
         }
     }
+    if depth != 0 { return 0; }
 
     if split_idx > 0 {
         let left = eval_arith(state, s[..split_idx]);
         let right = eval_arith(state, s[split_idx + 1..]);
         if op == '+' { return left + right; }
         if op == '-' { return left - right; }
-    }
-
-    // Look for next precedence: *, /, %
-    depth = 0;
-    split_idx = -1;
-    op = 0;
-    for i in s.len {
-        let c = s[i];
-        if c == '(' { depth++; }
-        else if c == ')' { depth--; }
-        else if depth == 0 {
-            if c == '*' || c == '/' || c == '%' {
-                split_idx = i;
-                op = c;
-            }
-        }
-    }
-
-    if split_idx > 0 {
-        let left = eval_arith(state, s[..split_idx]);
-        let right = eval_arith(state, s[split_idx + 1..]);
         if op == '*' { return left * right; }
         if op == '/' { return if right != 0 { left / right } else { 0 }; }
         if op == '%' { return if right != 0 { left % right } else { 0 }; }
     }
+
+    // Remove parentheses only when the first group encloses the whole term.
+    if s[0] == '(' && outer_end == s.len - 1 {
+        return eval_arith(state, s[1..s.len - 1]);
+    }
+    if s[0] == '-' { return -eval_arith(state, s[1..]); }
+    if s[0] == '+' { return eval_arith(state, s[1..]); }
 
     // Single term: number or variable name
     let num, ok = parse_int(s);
@@ -195,6 +198,24 @@ recursive fn eval_arith(state: const ShellState&, expr: const u8[:]) -> i64 {
     }
 
     return 0;
+}
+
+// Find the closing pair after all arithmetic grouping parentheses are closed.
+fn arithmetic_end(word: const u8[:], start: i64) -> i64 {
+    var depth = 0;
+    var j = start;
+    while j < word.len {
+        if word[j] == '(' { depth++; }
+        else if word[j] == ')' {
+            if depth == 0 {
+                if j + 1 < word.len && word[j + 1] == ')' { return j; }
+                return -1;
+            }
+            depth--;
+        }
+        j++;
+    }
+    return -1;
 }
 
 // Capture subshell output for $(...) and `...`
@@ -276,6 +297,17 @@ fn expand_word(state: const ShellState&, word: const u8[:], out: u8[..128]&) {
                     if next == '"' || next == '\\' || next == '$' || next == '`' {
                         out.push(next);
                         i += 2;
+                        continue;
+                    }
+                }
+
+                // Arithmetic must be recognized before the $(...) prefix.
+                if qc == '$' && i + 2 < len && word[i + 1] == '(' && word[i + 2] == '(' {
+                    let start = i + 3;
+                    let end = arithmetic_end(word, start);
+                    if end >= 0 {
+                        format(out, eval_arith(state, word[start..end]));
+                        i = end + 2;
                         continue;
                     }
                 }
@@ -371,15 +403,7 @@ fn expand_word(state: const ShellState&, word: const u8[:], out: u8[..128]&) {
         // 3. Unquoted expansions: Arithmetic $((...))
         if c == '$' && i + 2 < len && word[i + 1] == '(' && word[i + 2] == '(' {
             let start = i + 3;
-            var end = -1;
-            var j = start;
-            while j + 1 < len {
-                if word[j] == ')' && word[j + 1] == ')' {
-                    end = j;
-                    break;
-                }
-                j++;
-            }
+            let end = arithmetic_end(word, start);
             if end >= 0 {
                 let res = eval_arith(state, word[start..end]);
                 format(out, res);
