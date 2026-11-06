@@ -50,15 +50,23 @@ fn complete_path(prefix: const u8[:], results: u8[..256][..64]&) {
     var path_env: u8[>..] = [];
     if !env("PATH", path_env) { return; }
 
-    each_split(path_env, ':') {
-        if it.len > 0 && results.len < 64 {
+    // Iterate explicitly so leading, trailing and repeated ':' retain empty entries.
+    var start = 0;
+    for end in path_env.len + 1 {
+        if end < path_env.len && path_env[end] != ':' { continue; }
+        let dir = if end == start { "." } else { path_env[start..end] };
+        start = end + 1;
+        if results.len < 64 {
             var buf: u8[8192] = [0; 8192];
-            let n = gosh_list_dir(it, buf);
+            let n = gosh_list_dir(dir, buf);
             if n > 0 {
                 let dir_text = buf[..n];
                 each_split(dir_text, '\n') {
                     if it.len > 0 && results.len < 64 {
                         if starts_with(it, prefix) {
+                            var full_path: u8[>..] = [];
+                            format(full_path, dir, "/", it);
+                            if gosh_is_executable(full_path) == 0 { continue; }
                             // Check if already in results
                             var already = false;
                             for r in results {
@@ -74,30 +82,51 @@ fn complete_path(prefix: const u8[:], results: u8[..256][..64]&) {
                 };
             }
         }
-    };
+    }
+}
+
+struct CompletionContext {
+    word_start: i32 = 0,
+    command_position: bool = true,
+}
+
+// Only track word boundaries, quotes, escapes and simple-command separators.
+// This deliberately does not parse substitutions or compound shell grammar.
+fn completion_context(input: const u8[:]) -> CompletionContext {
+    var context = CompletionContext {};
+    var quote: u8 = 0;
+    var escaped = false;
+    for i in input.len {
+        let c = input[i];
+        if escaped { escaped = false; continue; }
+        if c == '\\' && quote != '\'' { escaped = true; continue; }
+        if quote != 0 {
+            if c == quote { quote = 0; }
+            continue;
+        }
+        if c == '\'' || c == '"' { quote = c; continue; }
+        // '&' in redirections is not a command separator.
+        let redir_amp = c == '&' &&
+            ((i > 0 && (input[i - 1] == '>' || input[i - 1] == '<')) ||
+             (i + 1 < input.len && input[i + 1] == '>'));
+        if c == '|' || c == ';' || (c == '&' && !redir_amp) {
+            context.word_start = i + 1;
+            context.command_position = true;
+        } else if c == ' ' || c == '\t' {
+            if context.word_start < i { context.command_position = false; }
+            context.word_start = i + 1;
+        }
+    }
+    return context;
 }
 
 // Find all completions for current word under cursor
 fn find_completions(state: const ShellState&, input_line: const u8[:], results: u8[..256][..64]&) {
     results.clear();
 
-    // Extract current word at end of input
-    var word_start = input_line.len;
-    while word_start > 0 && input_line[word_start - 1] != ' ' && input_line[word_start - 1] != '\t' &&
-          input_line[word_start - 1] != '|' && input_line[word_start - 1] != ';' {
-        word_start--;
-    }
-    let current_word = input_line[word_start..];
-
-    // Check if this is the first word (command position)
-    var is_cmd_pos = true;
-    for i in word_start {
-        let c = input_line[i];
-        if c != ' ' && c != '\t' && c != '|' && c != ';' {
-            is_cmd_pos = false;
-            break;
-        }
-    }
+    let context = completion_context(input_line);
+    let current_word = input_line[context.word_start..];
+    let is_cmd_pos = context.command_position;
 
     // 1. Variable completion if starts with $
     if current_word.len > 0 && current_word[0] == '$' {

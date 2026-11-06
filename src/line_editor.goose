@@ -541,11 +541,8 @@ fn read_interactive_line(state: ShellState&, out_line: u8[..512]&) -> bool {
             if completions.len == 1 {
                 // Single completion: replace/complete current word
                 let comp = completions[0];
-                var word_start = cursor;
-                while word_start > 0 && buf[word_start - 1] != ' ' && buf[word_start - 1] != '\t' &&
-                      buf[word_start - 1] != '|' && buf[word_start - 1] != ';' {
-                    word_start--;
-                }
+                let context = completion_context(buf[..cursor]);
+                let word_start = context.word_start;
                 let typed_word = buf[word_start..cursor];
                 if starts_with(comp, typed_word) {
                     let addition = comp[typed_word.len..];
